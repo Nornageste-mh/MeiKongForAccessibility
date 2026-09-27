@@ -179,6 +179,8 @@ namespace MeiKongA11yProbe
             string jump = Environment.GetEnvironmentVariable("MKPROBE_JUMP");
             float jumpAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_JUMP_AT"), 30f);
             bool jumped = false;
+            bool poked = false;
+            float PokeAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_POKE_AT"), 0f);
             while (true)
             {
                 yield return new WaitForSecondsRealtime(n < 12 ? 5f : 20f);
@@ -186,6 +188,12 @@ namespace MeiKongA11yProbe
                 try { Snapshot(n); } catch (Exception e) { Say("Snapshot 异常: " + e.Message); }
                 if (!_sceneTreeDumped && n >= 4) { try { DumpScenes("首次"); _sceneTreeDumped = true; } catch (Exception e) { Say("DumpScenes 异常: " + e.Message); } }
                 if (n == 6) { try { AuditPanels(); } catch (Exception e) { Say("AuditPanels 异常: " + e.Message); } }
+                if (n == 7) { try { AuditInteraction(); } catch (Exception e) { Say("AuditInteraction 异常: " + e.Message); } }
+                if (!poked && PokeAt > 0f && (Time.realtimeSinceStartup - _startedAt) >= PokeAt)
+                {
+                    poked = true;
+                    try { DoPoke(); } catch (Exception e) { Say("戳诗萌失败: " + e.Message); }
+                }
                 if (!jumped && !string.IsNullOrEmpty(jump) && (Time.realtimeSinceStartup - _startedAt) >= jumpAt)
                 {
                     jumped = true;
@@ -273,6 +281,153 @@ namespace MeiKongA11yProbe
             }
         }
 
+        // ==================================================================
+        // 交互面勘查：怎么戳诗萌、互动按钮有哪些、右键菜单里是什么、桌宠在哪儿
+        // ==================================================================
+        private static void AuditInteraction()
+        {
+            Say("");
+            Say("################ 交互面勘查 ################");
+            var asm = typeof(DialogueLine).Assembly;
+
+            // ---- 1) 桌宠模式状态 + 诗萌在屏幕上的位置 ----
+            var inputUtil = asm.GetType("PetDeskPetInputUtility");
+            bool deskPet = false;
+            try
+            {
+                var m = inputUtil?.GetMethod("IsDeskPetActive", BindingFlags.Public | BindingFlags.Static);
+                if (m != null) deskPet = (bool)m.Invoke(null, null);
+            }
+            catch { }
+            Say("[模式] IsDeskPetActive = " + deskPet);
+
+            var dmType = asm.GetType("PetDisplayModeController");
+            if (dmType != null)
+            {
+                foreach (var inst in UnityEngine.Object.FindObjectsOfType(dmType, true))
+                {
+                    object mode = null;
+                    try
+                    {
+                        var pi = dmType.GetProperty("SurfaceMode", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                              ?? dmType.GetProperty("CurrentMode", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                        if (pi != null) mode = pi.GetValue(inst);
+                    }
+                    catch { }
+                    Say("    PetDisplayModeController: SurfaceMode=" + (mode ?? "?"));
+                }
+            }
+
+            // 诗萌本体：Spine GameObject (skeleton) 的屏幕位置
+            var clickTargetType = asm.GetType("ShiMeng.DialogueV2.DialogueEntryClickTarget");
+            if (clickTargetType != null)
+            {
+                foreach (var ct in UnityEngine.Object.FindObjectsOfType(clickTargetType, true))
+                {
+                    var comp = ct as Component;
+                    if (comp == null) continue;
+                    string tid = "";
+                    try
+                    {
+                        var f = clickTargetType.GetField("targetId", BindingFlags.Instance | BindingFlags.NonPublic);
+                        if (f != null) tid = Convert.ToString(f.GetValue(comp));
+                    }
+                    catch { }
+                    var col = comp.GetComponent<Collider2D>();
+                    string pos = "?";
+                    try
+                    {
+                        var cam = Camera.main;
+                        if (cam != null && col != null && col.bounds.size.x > 0f)
+                        {
+                            var sp = cam.WorldToScreenPoint(col.bounds.center);
+                            pos = "屏幕 (" + (int)sp.x + "," + (int)sp.y + ") 尺寸 " + (int)col.bounds.size.x + "x" + (int)col.bounds.size.y
+                                + " 窗口 " + Screen.width + "x" + Screen.height;
+                        }
+                    }
+                    catch { }
+                    Say("    点击目标 targetId=" + tid + " " + pos);
+                }
+            }
+
+            // ---- 2) 互动按钮（MainStoryTriggerButtonVariant）----
+            var varType = asm.GetType("ShiMeng.DialogueV2.MainStoryTriggerButtonVariant");
+            Say("[互动按钮] MainStoryTriggerButtonVariant x"
+                + (varType == null ? "类型未找到" : UnityEngine.Object.FindObjectsOfType(varType, true).Length.ToString()));
+            if (varType != null)
+            {
+                foreach (var v in UnityEngine.Object.FindObjectsOfType(varType, true))
+                {
+                    var comp = v as Component;
+                    if (comp == null) continue;
+                    string label = "";
+                    try
+                    {
+                        var pi = varType.GetProperty("Label");
+                        if (pi != null) label = Convert.ToString(pi.GetValue(v));
+                    }
+                    catch { }
+                    var btn = comp.GetComponent<Button>();
+                    string tmp = ProbePlugin.Label(SubtreeText(comp.transform));
+                    Say("    - " + Chain(comp.transform) + " label=\"" + label + "\" tmp=" + tmp
+                        + " active=" + comp.gameObject.activeInHierarchy
+                        + " interactable=" + (btn != null ? btn.IsInteractable().ToString() : "无Button"));
+                }
+            }
+
+            // ---- 3) 右键菜单（DeskPetContextMenu）----
+            var ctxType = asm.GetType("PetDeskPetContextMenuController");
+            if (ctxType != null)
+            {
+                foreach (var c in UnityEngine.Object.FindObjectsOfType(ctxType, true))
+                {
+                    var comp = c as Component;
+                    if (comp == null) continue;
+                    object open = null;
+                    try { var pi = ctxType.GetProperty("IsOpen"); if (pi != null) open = pi.GetValue(c); } catch { }
+                    Say("[右键菜单] " + Chain(comp.transform) + " IsOpen=" + open);
+                    // 菜单根的子节点（可能是运行时解析的兄弟节点）
+                    var menuRootF = ctxType.GetField("menuRoot", BindingFlags.Instance | BindingFlags.NonPublic);
+                    var menuRoot = menuRootF != null ? menuRootF.GetValue(c) as RectTransform : null;
+                    var root = menuRoot != null ? menuRoot : comp.transform as RectTransform;
+                    if (root != null)
+                    {
+                        Say("    菜单根 = " + Chain(root) + " 子节点 " + root.childCount + " 个");
+                        for (int i = 0; i < root.childCount && i < 20; i++)
+                        {
+                            var ch = root.GetChild(i);
+                            Say("      [" + i + "] " + ch.name + " " + Describe(ch.gameObject, 0)
+                                + " label=" + ProbePlugin.Label(SubtreeText(ch)));
+                        }
+                    }
+                }
+            }
+
+            // ---- 4) 悬停条 ----
+            var hovType = asm.GetType("PetDeskPetHoverUiController");
+            if (hovType != null)
+            {
+                foreach (var h in UnityEngine.Object.FindObjectsOfType(hovType, true))
+                {
+                    var comp = h as Component;
+                    if (comp == null) continue;
+                    Say("[悬停条] " + Chain(comp.transform) + " " + Describe(comp.gameObject, 0));
+                }
+            }
+
+            // ---- 5) DialogueEntryManager 的条目结构（只读结构，不读剧本文本）----
+            var demType = asm.GetType("ShiMeng.DialogueV2.DialogueEntryManager");
+            Say("[入口管理器] DialogueEntryManager = " + (demType == null ? "未找到" : ("实例 " + UnityEngine.Object.FindObjectsOfType(demType, true).Length + " 个")));
+            if (demType != null)
+            {
+                foreach (var f in demType.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public))
+                {
+                    if (f.Name.IndexOf("config", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    Say("    字段 " + f.Name + " : " + f.FieldType.Name);
+                }
+            }
+        }
+
         private static string Describe(GameObject go, int depth)
         {
             if (go == null) return "(null)";
@@ -315,6 +470,19 @@ namespace MeiKongA11yProbe
         {
             float v;
             return float.TryParse(s, out v) ? v : d;
+        }
+
+        /// <summary>戳一下诗萌：等价于鼠标左键点她（走游戏自己的 DialogueEntryClickTarget.FireClick）。</summary>
+        private static void DoPoke()
+        {
+            var t = typeof(DialogueLine).Assembly.GetType("ShiMeng.DialogueV2.DialogueEntryClickTarget");
+            if (t == null) { Say("[戳诗萌] 找不到 DialogueEntryClickTarget"); return; }
+            var arr = UnityEngine.Object.FindObjectsOfType(t, true);
+            if (arr == null || arr.Length == 0) { Say("[戳诗萌] 场景里没有点击目标"); return; }
+            var m = t.GetMethod("FireClick", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            if (m == null) { Say("[戳诗萌] 找不到 FireClick"); return; }
+            m.Invoke(arr[0], null);
+            Say("[戳诗萌] 已调用 FireClick（等价于左键点她）");
         }
 
         private static void DoJump(string scenarioId)

@@ -54,6 +54,8 @@ namespace MeiKongA11y
         internal static ConfigEntry<string> CfgMenuKey;          // 功能菜单
         internal static ConfigEntry<string> CfgStateKey;         // 状态播报
         internal static ConfigEntry<bool>   CfgAnnouncePanel;    // 面板开关播报
+        internal static ConfigEntry<string> CfgPokeKey;          // 戳一下诗萌（= 左键点她）
+        internal static ConfigEntry<string> CfgStoryBtnKey;      // 和诗萌聊聊（互动按钮）
 
         // ---- 其它 ----
         internal static ConfigEntry<bool>   CfgStartupHint;
@@ -124,6 +126,15 @@ namespace MeiKongA11y
             CfgAnnouncePanel = Config.Bind("交互", "面板开关时自动播报", true,
                 "面板被打开 / 关闭时主动说一句（例：「已打开：日程表，6 个可操作项」）。");
 
+            CfgPokeKey = Config.Bind("交互", "戳一下诗萌", "F3",
+                "等价于**用鼠标左键点她本人**：走的是游戏自己的 DialogueEntryClickTarget.FireClick()，\n" +
+                "所以点击音效、番茄钟专注时的分支行为都和鼠标点击完全一致。\n" +
+                "不给任何额外信息 —— 正常人点她也是这个结果，只是盲人不用去屏幕上找她。");
+
+            CfgStoryBtnKey = Config.Bind("交互", "和诗萌聊聊", "F4",
+                "按下当前可见的「和诗萌聊聊」按钮（MainStoryTriggerButtonVariant）。\n" +
+                "按钮此刻不可见时会退化为「戳一下诗萌」。");
+
             CfgStartupHint = Config.Bind("其它", "启动时播报", true,
                 "游戏启动后朗读一句「无障碍补丁已加载」，用来确认读屏通路是通的。");
 
@@ -181,7 +192,7 @@ namespace MeiKongA11y
                 try { ready = Speech.Ready(); } catch { }
                 if (!ready) continue;
                 if (CfgStartupHint != null && CfgStartupHint.Value)
-                    Speech.Speak("妹控计划无障碍补丁已加载。按 F1 打开功能菜单，按 F2 播报状态，按 Tab 进入界面导航。", true);
+                    Speech.Speak("妹控计划无障碍补丁已加载。F1 功能菜单，F2 播报状态，F3 戳一下诗萌，F4 和她聊聊，Tab 进入界面导航，退格键重读当前句。", true);
                 yield break;
             }
         }
@@ -208,6 +219,8 @@ namespace MeiKongA11y
                 if (KeyDown(CfgMenuKey)) Surfaces.OpenMenu();
                 if (KeyDown(CfgStateKey)) Surfaces.ReportState();
                 if (KeyDown(CfgRepeatKey)) Reader.Repeat();
+                if (KeyDown(CfgPokeKey)) Pet.Poke();
+                if (KeyDown(CfgStoryBtnKey)) Pet.ClickStoryButton();
             }
             catch (Exception e) { A11yHost.Diag("[每帧] Update 异常: " + e.Message); }
         }

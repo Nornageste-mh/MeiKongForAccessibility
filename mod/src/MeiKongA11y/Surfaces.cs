@@ -254,6 +254,12 @@ namespace MeiKongA11y
         internal static void ReportState()
         {
             var sb = new System.Text.StringBuilder();
+            string mode = Pet.DisplayMode();
+            if (!string.IsNullOrEmpty(mode)) sb.Append(mode).Append("。");
+
+            string where = Pet.WhereIsPet();
+            if (!string.IsNullOrEmpty(where)) sb.Append(where);
+
             string id = CurrentPanelId();
             if (string.IsNullOrEmpty(id)) sb.Append("当前没有打开的面板。");
             else sb.Append("当前面板：").Append(PanelCn(id)).Append("，").Append(CountOperable(id)).Append(" 个可操作项。");
