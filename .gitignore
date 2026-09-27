@@ -1,11 +1,16 @@
 # ============================================================================
-# A11yFramework · .gitignore
+# 本仓库的 .gitignore
 #
 # 这份清单本身就是一条纪律（《无障碍补丁流水线》§6 P8「提交前守卫」）：
-# 三作的教训汇总下来，「不该入库」的东西只有两类 ——
+# 「不该入库」的东西只有两类 ——
 #   1) 版权内容：游戏本体资源、反编译产物、剧本导出、含台词的日志、游戏截图
 #   2) 构建噪音：下载的依赖、编译中间产物、玩家自己的配置与存档
-# 由 build\check-staged.ps1 在 git commit 前机械拦截。
+# 由 tools/check-staged.ps1 在 git commit 前机械拦截。
+#
+# ⚠ **规则后面不能跟行内注释。** gitignore 只在**行首**认 `#`；
+#   写成 `package/   # 安装包` 的话，整行会被当成一个模式，
+#   于是这条规则**静默失效** —— 第三方二进制与发布 zip 就这样进过一次库
+#   （2026-09-27，见 CHANGELOG）。注释一律另起一行。
 # ============================================================================
 
 # ---- 1) 版权内容（**绝不允许入库**，见流水线 §6 P1「证据的 IP 红线」）----
@@ -13,30 +18,46 @@
 # 「仓库不含任何游戏资源」这句话必须**字面成立**。
 # 游戏截图与含台词原文的会话日志故意不入库 —— 画面本身就是游戏美术资源，
 # [朗读] 日志行就是剧本原文。
-extracted/            # 从游戏提取的剧本表
-decompiled/           # 反编译的游戏代码
-*.LogOutput.log
+
+# 从游戏提取的剧本表
+extracted/
+# 反编译的游戏代码
+decompiled/
+
 LogOutput.log
-probe/evidence/*.png  # 游戏截图
-probe/evidence/*.log  # 会话日志（含台词）
+*.LogOutput.log
+
+# 游戏截图
+probe/evidence/*.png
+# 会话日志（含台词）
+probe/evidence/*.log
 probe/evidence/LogOutput*.log
 
 # ---- 2) 构建噪音 ----
-dl/                   # 下载的 BepInEx / NVDA zip
-bep_dl/               # 解压出来的 BepInEx（不入库，靠 build.ps1 复现）
+
+# 下载的 BepInEx / NVDA zip
+dl/
+# 解压出来的 BepInEx（不入库，靠 build.ps1 复现）
+bep_dl/
 nvda_dl/
-dist/                 # 发布 zip（只进 GitHub Releases）
+# 发布 zip（只进 GitHub Releases）
+dist/
 bin/
 obj/
 *.user
 *.suo
 .vs/
-package/              # 组装出来的安装包，不是源码
-.compilecheck/        # compile_check.ps1 的临时工程
+# 组装出来的安装包，不是源码
+package/
+# compile_check.ps1 的临时工程
+.compilecheck/
 
 # ---- 3) 玩家的东西（**不分发**，见流水线 §6 P6「不打包清单」）----
-*.cfg                 # BepInEx 配置：玩家自己的设置
-Interop/              # IL2CPP 首次运行时按本机游戏生成，不该由我们分发
+
+# BepInEx 配置：玩家自己的设置
+*.cfg
+# IL2CPP 首次运行时按本机游戏生成，不该由我们分发
+Interop/
 interop/
 unity-libs/
 save_backup*/
@@ -44,7 +65,7 @@ save_ch*/
 *_save.json
 
 # ---- 4) 开发期笔记 ----
-# noexistence 明确「故意不入库」，后来把五份开发期笔记移出了版本库。
+# 《不/存在的你，和我》明确「故意不入库」，后来把五份开发期笔记移出了版本库。
 notes/
 开发笔记*.md
 分析笔记*.md
