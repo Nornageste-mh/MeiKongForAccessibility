@@ -1,8 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    逐作 csproj 模板。new_game.py 会按 --route 保留 MONO 或 IL2CPP 那一段，
+    逐作 csproj 模板。new_game.py 会按 route 参数保留 MONO 或 IL2CPP 那一段，
     删掉另一段和所有路线标记行。
+
+    （踩坑：原文写的是命令行的双横线参数名，而 XML 注释里不允许出现连续两个减号，
+      会让 MSBuild 直接报 MSB4025「未能加载项目文件」。A11yFramework 的模板同样有此问题。）
 
     ★ 三行可复现构建属性**一条都不能少**（README「构建与打包」）：
         Deterministic

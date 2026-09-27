@@ -185,6 +185,7 @@ namespace MeiKongA11yProbe
                 n++;
                 try { Snapshot(n); } catch (Exception e) { Say("Snapshot 异常: " + e.Message); }
                 if (!_sceneTreeDumped && n >= 4) { try { DumpScenes("首次"); _sceneTreeDumped = true; } catch (Exception e) { Say("DumpScenes 异常: " + e.Message); } }
+                if (n == 6) { try { AuditPanels(); } catch (Exception e) { Say("AuditPanels 异常: " + e.Message); } }
                 if (!jumped && !string.IsNullOrEmpty(jump) && (Time.realtimeSinceStartup - _startedAt) >= jumpAt)
                 {
                     jumped = true;
@@ -192,6 +193,122 @@ namespace MeiKongA11yProbe
                     DumpScenes("跳转后");
                 }
             }
+        }
+
+        // ==================================================================
+        // 界面勘查：面板清单 / 功能按钮条 / 桌宠交互面
+        // 这一节是为「盲人怎么跟控件交互、怎么玩小游戏」服务的，
+        // 所以重点不是台词，而是「有哪些可操作的东西、它们有没有可读标签」。
+        // ==================================================================
+        private static void AuditPanels()
+        {
+            Say("");
+            Say("################ 界面勘查 ################");
+            var asm = typeof(DialogueLine).Assembly;
+
+            // ---- 1) PetPanelRegistry 里的全部面板 ----
+            var regType = asm.GetType("PetPanelRegistry");
+            Say("[面板注册表] PetPanelRegistry = " + (regType == null ? "未找到" : "OK"));
+            if (regType != null)
+            {
+                foreach (var inst in UnityEngine.Object.FindObjectsOfType(regType, true))
+                {
+                    var flds = regType.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+                    foreach (var f in flds)
+                    {
+                        var dict = f.GetValue(inst) as System.Collections.IDictionary;
+                        if (dict == null) continue;
+                        Say("  字段 " + f.Name + " : " + dict.Count + " 个面板");
+                        foreach (System.Collections.DictionaryEntry e in dict)
+                        {
+                            var go = e.Value as GameObject;
+                            Say("    - " + e.Key + " -> " + Describe(go, 1));
+                        }
+                    }
+                }
+            }
+
+            // ---- 2) 功能按钮条（button_*）----
+            Say("[功能按钮] 名称以 button_ 开头的对象：");
+            var all = UnityEngine.Object.FindObjectsOfType<Transform>(true);
+            foreach (var t in all)
+            {
+                if (t == null || !t.name.StartsWith("button_", StringComparison.OrdinalIgnoreCase)) continue;
+                Say("    - " + Chain(t) + " -> " + Describe(t.gameObject, 0));
+            }
+
+            // ---- 3) 桌宠交互面 ----
+            Say("[桌宠交互面]");
+            foreach (var tn in new[] { "PetDeskPetContextMenuController", "PetDeskPetHoverUiController", "PetDeskPetHoverReveal",
+                                       "PetDeskPetDragController", "PetDisplayModeController", "PetUiSurfaceSwitcher" })
+            {
+                var ty = asm.GetType(tn);
+                if (ty == null) { Say("    - " + tn + " : 未找到"); continue; }
+                var insts = UnityEngine.Object.FindObjectsOfType(ty, true);
+                Say("    - " + tn + " x" + insts.Length);
+            }
+
+            // ---- 4) 小游戏 ----
+            foreach (var tn in new[] { "MemoryMatchUIView", "MemoryMatchPanelController", "MemeMakerPanelController" })
+            {
+                var ty = asm.GetType("ShiMeng.Minigames.MemoryMatch." + tn) ?? asm.GetType(tn);
+                Say("    - " + tn + " : " + (ty == null ? "未找到" : "OK"));
+            }
+
+            // ---- 5) 全场景「有标签的按钮」总表（去重前 60 条）----
+            Say("[全部 Button：对象名 -> 子树里第一个 TMP 文本]");
+            int n = 0;
+            foreach (var b in UnityEngine.Object.FindObjectsOfType<Button>(true))
+            {
+                if (b == null || n++ > 60) continue;
+                Say("    - " + Chain(b.transform) + "  label=" + ProbePlugin.Label(SubtreeText(b.transform)));
+            }
+
+            // ---- 6) TMP_InputField 清单（数字/文本输入，盲人要能用）----
+            Say("[TMP_InputField]");
+            foreach (var inf in UnityEngine.Object.FindObjectsOfType<TMP_InputField>(true))
+            {
+                if (inf == null) continue;
+                Say("    - " + Chain(inf.transform) + "  text=" + ProbePlugin.Label(inf.text));
+            }
+        }
+
+        private static string Describe(GameObject go, int depth)
+        {
+            if (go == null) return "(null)";
+            var cg = go.GetComponent<CanvasGroup>();
+            var sels = go.GetComponentsInChildren<Selectable>(true);
+            var tmps = go.GetComponentsInChildren<TMP_Text>(true);
+            int liveSel = sels.Count(s => s != null && s.IsActive() && s.IsInteractable());
+            int liveTmp = tmps.Count(t => t != null && t.gameObject.activeInHierarchy && !string.IsNullOrEmpty(t.text));
+            var sb = new StringBuilder();
+            sb.Append("activeSelf=").Append(go.activeSelf).Append(" activeInHier=").Append(go.activeInHierarchy);
+            if (cg != null) sb.Append(" alpha=").Append(cg.alpha.ToString("0.##")).Append(" ray=").Append(cg.blocksRaycasts);
+            sb.Append(" Selectable=").Append(liveSel).Append("/").Append(sels.Length);
+            sb.Append(" TMP=").Append(liveTmp).Append("/").Append(tmps.Length);
+            return sb.ToString();
+        }
+
+        private static string Chain(Transform t)
+        {
+            var sb = new StringBuilder();
+            var cur = t;
+            int guard = 0;
+            while (cur != null && guard++ < 6)
+            {
+                if (sb.Length > 0) sb.Insert(0, "/");
+                sb.Insert(0, cur.name);
+                cur = cur.parent;
+            }
+            return sb.ToString();
+        }
+
+        private static string SubtreeText(Transform t)
+        {
+            var tmp = t.GetComponentInChildren<TMP_Text>(true);
+            if (tmp != null && !string.IsNullOrEmpty(tmp.text)) return tmp.text;
+            var ut = t.GetComponentInChildren<Text>(true);
+            return ut != null ? ut.text : "";
         }
 
         private static float ParseFloat(string s, float d)
