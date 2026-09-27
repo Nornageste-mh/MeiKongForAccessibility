@@ -98,9 +98,9 @@ namespace MeiKongA11y
                 {
                     _announcedStart = true;
                     _row = _col = 0;
-                    Speech.Speak("记忆翻牌开始。" + _rows + " 行 " + _cols + " 列，共 " + _cards.Count + " 张牌。"
-                                 + "方向键移动，回车翻牌。现在在第 1 行第 1 列，"
-                                 + StateWord(CardAt(_row, _col)) + "。", true);
+                    Announcer.Auto("记忆翻牌开始。" + _rows + " 行 " + _cols + " 列，共 " + _cards.Count + " 张牌。"
+                                   + "方向键移动，回车翻牌。现在在第 1 行第 1 列，"
+                                   + StateWord(CardAt(_row, _col)) + "。");
                     _lastTurn = Turn;
                     _lastPlayerScore = PlayerScore; _lastCpuScore = CpuScore;
                     return;
@@ -120,12 +120,12 @@ namespace MeiKongA11y
             if (ps != _lastPlayerScore || cs != _lastCpuScore)
             {
                 _lastPlayerScore = ps; _lastCpuScore = cs;
-                Speech.Speak("比分，哥哥 " + ps + " 分，诗萌 " + cs + " 分。", false);
+                Announcer.Auto("比分，哥哥 " + ps + " 分，诗萌 " + cs + " 分。");
             }
             if (turn != _lastTurn)
             {
                 _lastTurn = turn;
-                Speech.Speak(turn == MemoryMatchSide.Player ? "轮到你了。" : "轮到诗萌了，等她翻。", false);
+                Announcer.Auto(turn == MemoryMatchSide.Player ? "轮到你了。" : "轮到诗萌了，等她翻。");
             }
         }
 

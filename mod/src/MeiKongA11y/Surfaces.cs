@@ -123,12 +123,12 @@ namespace MeiKongA11y
             _lastPanel = now;
             if (string.IsNullOrEmpty(now))
             {
-                if (!string.IsNullOrEmpty(prev)) Speech.Speak("面板已关闭。", false);
+                if (!string.IsNullOrEmpty(prev)) Announcer.Auto("面板已关闭。");
                 return;
             }
             string cn = PanelCn(now);
             int sels = CountOperable(now);
-            Speech.Speak("已打开：" + cn + "，" + sels + " 个可操作项。按 Tab 进入导航。", false);
+            Announcer.Auto("已打开：" + cn + "，" + sels + " 个可操作项。按 Tab 进入导航。");
         }
 
         /// <summary>当前打开面板的中文名（给 UiNav 的组名用）。没打开面板时返回空串。</summary>
@@ -216,7 +216,7 @@ namespace MeiKongA11y
             }
             sb.Append("。按数字键打开。");
             _menuUntil = Time.realtimeSinceStartup + 10f;
-            Speech.Speak(sb.ToString(), true);
+            Announcer.Now(sb.ToString());
         }
 
         private static void HandleMenuKeys()
@@ -229,7 +229,7 @@ namespace MeiKongA11y
             string cn = _menuNames[pick - 1];
             _menuUntil = 0f;
             bool ok = ActivateBarButton(objName);
-            Speech.Speak(ok ? ("打开" + cn) : (cn + " 现在打不开。"), true);
+            Announcer.Now(ok ? ("打开" + cn) : (cn + " 现在打不开。"));
         }
 
         private static Button FindBarButton(string objectName)
@@ -283,7 +283,7 @@ namespace MeiKongA11y
             }
             catch { }
             sb.Append("全屏共 ").Append(live).Append(" 个可操作项。");
-            Speech.Speak(sb.ToString(), true);
+            Announcer.Now(sb.ToString());
         }
 
         /// <summary>

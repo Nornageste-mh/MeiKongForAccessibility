@@ -57,6 +57,7 @@ namespace MeiKongA11y
         internal static ConfigEntry<string> CfgPokeKey;          // 戳一下诗萌（= 左键点她）
         internal static ConfigEntry<string> CfgStoryBtnKey;      // 和诗萌聊聊（互动按钮）
         internal static ConfigEntry<string> CfgFullScreenKey;    // 保命键：切回全屏
+        internal static ConfigEntry<bool>   CfgQueueBehindVoice; // 自动播报是否等配音放完
 
         // ---- 其它 ----
         internal static ConfigEntry<bool>   CfgStartupHint;
@@ -143,6 +144,12 @@ namespace MeiKongA11y
                 "悬停条又需要鼠标。也就是说——**在游戏自己的界面里没有退路**。\n" +
                 "读屏用户一旦误开桌宠模式，就只能靠这个键回来。");
 
+            CfgQueueBehindVoice = Config.Bind("其它", "播报等配音放完", true,
+                "补丁自己的播报（小游戏开局、面板打开、进入桌宠模式…）会等诗萌这一句配音放完再念，\n" +
+                "避免两个声音叠在一起。\n" +
+                "**只影响系统自动播报**；你按键触发的反馈（F2 状态、选项念读、光标移动）永远立刻说 ——\n" +
+                "你在等答案，排队等于没反应。");
+
             CfgStartupHint = Config.Bind("其它", "启动时播报", true,
                 "游戏启动后朗读一句「无障碍补丁已加载」，用来确认读屏通路是通的。");
 
@@ -210,8 +217,8 @@ namespace MeiKongA11y
                 try { ready = Speech.Ready(); } catch { }
                 if (!ready) continue;
                 if (CfgStartupHint != null && CfgStartupHint.Value)
-                    Speech.Speak("妹控计划无障碍补丁已加载。F1 功能菜单，F2 播报状态，F3 戳一下诗萌，"
-                             + "F4 和她聊聊，F5 切回全屏，Tab 进入界面导航，退格键重读当前句。", true);
+                    Announcer.Auto("妹控计划无障碍补丁已加载。F1 功能菜单，F2 播报状态，F3 戳一下诗萌，"
+                                   + "F4 和她聊聊，F5 切回全屏，Tab 进入界面导航，退格键重读当前句。");
                 yield break;
             }
         }
@@ -233,6 +240,7 @@ namespace MeiKongA11y
                 // 每帧入口：导航 / 选项 / 面板感知 / 功能菜单
                 try { A11yHost.TickUiNav?.Invoke(); }
                 catch (Exception e) { A11yHost.Diag("[每帧] TickUiNav 异常: " + e.Message); }
+                try { Announcer.Tick(); } catch { }
 
                 // 热键
                 if (KeyDown(CfgMenuKey)) Surfaces.OpenMenu();

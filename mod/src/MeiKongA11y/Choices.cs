@@ -71,7 +71,7 @@ namespace MeiKongA11y
             }
             if (Plugin.CfgChoiceHotkeys == null || Plugin.CfgChoiceHotkeys.Value)
                 sb.Append("。按数字键选择。");
-            Speech.Speak(sb.ToString(), true);
+            Announcer.Auto(sb.ToString());     // 选项出现是系统触发的 → 等配音放完再念
         }
 
         /// <summary>选项被清掉（段落结束 / 已选择）。</summary>
@@ -109,7 +109,7 @@ namespace MeiKongA11y
                 return;
             }
             string label = idx < _labels.Count ? _labels[idx] : "";
-            Speech.Speak("已选择：" + label, true);
+            Announcer.Now("已选择：" + label);
             Action cb = _callbacks[idx];
             Clear();                       // 先清，避免回调触发的下一段被当成重复
             try { if (cb != null) cb(); }

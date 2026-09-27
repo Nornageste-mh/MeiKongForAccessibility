@@ -222,10 +222,10 @@ namespace MeiKongA11y
                 _lastMode = now;
                 if (first) return;                      // 开局那次不念，免得吵
                 if (now == "桌宠模式")
-                    Speech.Speak("已进入桌宠模式。全屏界面已经收起，功能条和面板都看不见了。"
-                                 + "随时按 F5 切回全屏。", true);
+                    Announcer.Auto("已进入桌宠模式。全屏界面已经收起，功能条和面板都看不见了。"
+                                   + "随时按 F5 切回全屏。");
                 else
-                    Speech.Speak("已切回全屏模式。", true);
+                    Announcer.Auto("已切回全屏模式。");
             }
             catch { }
         }

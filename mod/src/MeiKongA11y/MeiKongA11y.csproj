@@ -82,6 +82,10 @@
       <HintPath>$(MeiKongGameDir)\MeiKongProject_Data\Managed\Unity.TextMeshPro.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="UnityEngine.AudioModule">
+      <HintPath>$(MeiKongGameDir)\MeiKongProject_Data\Managed\UnityEngine.AudioModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine.Physics2DModule">
       <HintPath>$(MeiKongGameDir)\MeiKongProject_Data\Managed\UnityEngine.Physics2DModule.dll</HintPath>
       <Private>false</Private>
