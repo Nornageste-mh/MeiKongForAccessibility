@@ -151,6 +151,12 @@ namespace MeiKongA11y
             A11yHost.CfgQuitConfirm    = CfgQuitConfirm;
             A11yHost.CfgQuitNames      = CfgQuitNames;
 
+            // 界面标签三钩子（本作新增；平台层逻辑不变，只是多问一句）
+            A11yHost.GameTextIsNoise   = UiNav.GameTextIsNoise;
+            A11yHost.GameLabelOf       = UiNav.GameLabelOf;
+            A11yHost.GameGroupName     = UiNav.GameGroupName;
+            A11yHost.GameGroupPriority = UiNav.GameGroupPriority;
+
             A11yHost.BlockGameAdvance      = () => UiNav.BlockGameAdvance;
             A11yHost.ShouldMuteUnitySubmit = () => UiNav.ShouldMuteUnitySubmit;
             A11yHost.TickUiNav = () =>

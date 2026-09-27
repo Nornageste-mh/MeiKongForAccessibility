@@ -181,6 +181,10 @@ namespace MeiKongA11yProbe
             bool jumped = false;
             bool poked = false;
             float PokeAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_POKE_AT"), 0f);
+            bool opened = false, navToggled = false;
+            string OpenPanel = Environment.GetEnvironmentVariable("MKPROBE_OPEN_PANEL") ?? "";
+            float OpenAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_OPEN_AT"), 20f);
+            float NavAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_NAV_AT"), 0f);
             while (true)
             {
                 yield return new WaitForSecondsRealtime(n < 12 ? 5f : 20f);
@@ -193,6 +197,17 @@ namespace MeiKongA11yProbe
                 {
                     poked = true;
                     try { DoPoke(); } catch (Exception e) { Say("戳诗萌失败: " + e.Message); }
+                }
+                if (!opened && !string.IsNullOrEmpty(OpenPanel) && (Time.realtimeSinceStartup - _startedAt) >= OpenAt)
+                {
+                    opened = true;
+                    try { OpenPanelByName(OpenPanel); } catch (Exception e) { Say("开面板失败: " + e.Message); }
+                }
+                if (!navToggled && NavAt > 0f && (Time.realtimeSinceStartup - _startedAt) >= NavAt)
+                {
+                    navToggled = true;
+                    try { DoNavToggle(); } catch (Exception e) { Say("进导航失败: " + e.Message); }
+                    try { DumpNavAll(); } catch (Exception e) { Say("导航空表转储失败: " + e.Message); }
                 }
                 if (!jumped && !string.IsNullOrEmpty(jump) && (Time.realtimeSinceStartup - _startedAt) >= jumpAt)
                 {
@@ -485,6 +500,80 @@ namespace MeiKongA11yProbe
             Say("[戳诗萌] 已调用 FireClick（等价于左键点她）");
         }
 
+        /// <summary>把 a11y 补丁的整份导航表（所有组、所有项、按真实顺序）原样倒出来。</summary>
+        private static void DumpNavAll()
+        {
+            Say("");
+            Say("################ 导航表全量（用户按 PageUp/PageDown 能到达的一切）################");
+            Type t = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try { t = asm.GetType("MeiKongA11y.UiNav", false); } catch { }
+                if (t != null) break;
+            }
+            if (t == null) { Say("找不到 MeiKongA11y.UiNav"); return; }
+
+            var flags = BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public;
+            var fGroups = t.GetField("Groups", flags);
+            var mDescribe = t.GetMethod("Describe", flags);
+            var fIdx = t.GetField("_groupIndex", flags);
+            var groups = fGroups != null ? fGroups.GetValue(null) as System.Collections.IList : null;
+            if (groups == null) { Say("拿不到 Groups"); return; }
+            object cur = fIdx != null ? fIdx.GetValue(null) : null;
+            Say("共 " + groups.Count + " 组，当前组序号 = " + cur);
+            for (int gi = 0; gi < groups.Count; gi++)
+            {
+                object g = groups[gi];
+                var gt = g.GetType();
+                var fRoot = gt.GetField("Root", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var fItems = gt.GetField("Items", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var root = fRoot != null ? fRoot.GetValue(g) as Component : null;
+                var items = fItems != null ? fItems.GetValue(g) as System.Collections.IList : null;
+                Say("[组 " + (gi + 1) + "] 根=" + (root != null ? root.gameObject.name : "?")
+                    + "  项数=" + (items != null ? items.Count : -1));
+                if (items == null) continue;
+                for (int i = 0; i < items.Count; i++)
+                {
+                    var s = items[i] as Selectable;
+                    if (s == null) { Say("    #" + (i + 1) + " (null)"); continue; }
+                    string desc = "?";
+                    try { desc = mDescribe != null ? Convert.ToString(mDescribe.Invoke(null, new object[] { s })) : "?"; } catch { }
+                    Say("    #" + (i + 1) + " " + desc + "   <" + Chain(s.transform) + ">");
+                }
+            }
+        }
+
+        /// <summary>按对象名找到功能条按钮并点它（模拟玩家开面板）。</summary>
+        private static void OpenPanelByName(string objectName)
+        {
+            foreach (var b in UnityEngine.Object.FindObjectsOfType<Button>(true))
+            {
+                if (b == null || b.gameObject == null) continue;
+                if (!string.Equals(b.gameObject.name, objectName, StringComparison.Ordinal)) continue;
+                if (!b.gameObject.activeInHierarchy) continue;
+                b.onClick.Invoke();
+                Say("[开面板] 已点击按钮「" + objectName + "」");
+                return;
+            }
+            Say("[开面板] 找不到可用的按钮「" + objectName + "」");
+        }
+
+        /// <summary>调用 a11y 补丁的 UiNav.Toggle() 进入导航模式，触发它自己的诊断转储。</summary>
+        private static void DoNavToggle()
+        {
+            Type t = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try { t = asm.GetType("MeiKongA11y.UiNav", false); } catch { }
+                if (t != null) break;
+            }
+            if (t == null) { Say("[导航] 找不到 MeiKongA11y.UiNav（补丁没装？）"); return; }
+            var toggle = t.GetMethod("Toggle", BindingFlags.Public | BindingFlags.Static);
+            if (toggle == null) { Say("[导航] 找不到 Toggle"); return; }
+            toggle.Invoke(null, null);
+            Say("[导航] 已调用 UiNav.Toggle()");
+        }
+
         private static void DoJump(string scenarioId)
         {
             var runner = UnityEngine.Object.FindObjectOfType<DialogueV2Runner>(true);
@@ -725,11 +814,14 @@ namespace MeiKongA11yProbe
             ProbePlugin.Say(T + "AutoDestroyAfterTime delay=" + delay.ToString("0.##") + "s");
         }
 
+        // ⚠ 参数名必须与**运行时**一致（流水线 G2）：
+        //   反编译里是 AddMessage(string messageText, bool isLeft, PhoneDialogue dialogue)，
+        //   写错一个名字就会让整个补丁类 PatchAll 抛异常，而且其余补丁照常生效。
         [HarmonyPatch(typeof(PhoneDialogueManager), "AddMessage")]
         [HarmonyPrefix]
-        private static void PhoneAdd_Pre(string text, bool isPlayer)
+        private static void PhoneAdd_Pre(string messageText, bool isLeft)
         {
-            ProbePlugin.Say(T + "PhoneDialogueManager.AddMessage isPlayer=" + isPlayer + " text=" + ProbePlugin.Shape(text));
+            ProbePlugin.Say(T + "PhoneDialogueManager.AddMessage isLeft=" + isLeft + " text=" + ProbePlugin.Shape(messageText));
         }
     }
 

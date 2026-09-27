@@ -130,6 +130,13 @@ namespace MeiKongA11y
             Speech.Speak("已打开：" + cn + "，" + sels + " 个可操作项。按 Tab 进入导航。", false);
         }
 
+        /// <summary>当前打开面板的中文名（给 UiNav 的组名用）。没打开面板时返回空串。</summary>
+        internal static string CurrentPanelNameCn()
+        {
+            string id = CurrentPanelId();
+            return string.IsNullOrEmpty(id) ? "" : PanelCn(id);
+        }
+
         /// <summary>面板 Id → 中文（取自面板标题 TMP，探针实查）。</summary>
         private static string PanelCn(string id)
         {

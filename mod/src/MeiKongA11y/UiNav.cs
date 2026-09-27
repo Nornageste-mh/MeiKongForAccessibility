@@ -355,9 +355,13 @@ namespace MeiKongA11y
                     }
                 }
 
-                // 组排序：Canvas 层级高的、兄弟序号靠后的（在更上层）排前面
+                // 组排序：先问逐作钩子要权重（小的在前），权重相同才回到
+                // 「Canvas 层级高的、兄弟序号靠后的（在更上层）排前面」。
+                // 钩子没填时 GroupPriority 全部相等 → 排序结果与从前完全一致。
                 Groups.Sort((a, b) =>
                 {
+                    int pa = GroupPriority(a.Root), pb = GroupPriority(b.Root);
+                    if (pa != pb) return pa.CompareTo(pb);
                     if (a.CanvasOrder != b.CanvasOrder) return b.CanvasOrder.CompareTo(a.CanvasOrder);
                     return b.SiblingIndex.CompareTo(a.SiblingIndex);
                 });
@@ -858,10 +862,26 @@ namespace MeiKongA11y
         private static string TextOn(Component c)
         {
             TextMeshProUGUI tmp = c as TextMeshProUGUI;
-            if (tmp != null) return Norm(tmp.text);
+            if (tmp != null) return Noise(Norm(tmp.text));
             Text legacy = c as Text;
-            if (legacy != null) return Norm(legacy.text);
+            if (legacy != null) return Noise(Norm(legacy.text));
             return "";
+        }
+
+        /// <summary>
+        /// 逐作钩子：「这段文字是预制体占位，别念」。
+        /// 钩子没填时原样返回 —— 其它三作的行为与从前逐字节一致。
+        /// </summary>
+        private static string Noise(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return s;
+            try
+            {
+                var f = A11yHost.GameTextIsNoise;
+                if (f != null && f(s)) return "";
+            }
+            catch { }
+            return s;
         }
 
         /// <summary>同一个「行」里的标签文本：从自己往上找，最多两层。</summary>
@@ -936,6 +956,21 @@ namespace MeiKongA11y
             string own = OwnTextOf(s);
             if (own.Length > 0) return own;
 
+            // 逐作钩子放在「同行兄弟文字」**之前**，让它有覆盖权：
+            // 有些控件的同行文字不是它的标签（实测：音乐播放器滑条的同行是**当前曲名**，
+            // 念出来成了「何为幸福(Full Version)，滑条」——把曲名当成了控件名）。
+            // 钩子返回空串时照旧往下走，所以对没覆盖到的控件没有任何影响。
+            try
+            {
+                var fGame = A11yHost.GameLabelOf;
+                if (fGame != null)
+                {
+                    string gameFirst = fGame(s);
+                    if (!string.IsNullOrEmpty(gameFirst)) return gameFirst;
+                }
+            }
+            catch { }
+
             string row = AliasAncestorOf(s);
             string near = RowTextOf(s);
             if (near.Length > 0)
@@ -996,6 +1031,18 @@ namespace MeiKongA11y
             string role = InputFieldRoleName(inf);
             if (role.Length > 0) return role;
 
+            // 逐作钩子优先：输入框的同行标签（「循环次数」「专注时长」）比占位提示可靠
+            try
+            {
+                var fGame = A11yHost.GameLabelOf;
+                if (fGame != null)
+                {
+                    string gameLabel = fGame(inf);
+                    if (!string.IsNullOrEmpty(gameLabel)) return gameLabel;
+                }
+            }
+            catch { }
+
             string ph = PlaceholderText(inf);
             if (ph.Length > 0) return ph;
 
@@ -1043,13 +1090,80 @@ namespace MeiKongA11y
             return sb.ToString();
         }
 
+        /// <summary>
+        /// 面板组的中文名。逐作钩子命中就用它，否则退回根对象名。
+        /// （不改钩子的那三作仍然念 Canvas 路径下的根对象名，行为不变。）
+        /// </summary>
+        private static string GroupName(Transform root)
+        {
+            try
+            {
+                var f = A11yHost.GameGroupName;
+                if (root != null && f != null)
+                {
+                    string n = f(root);
+                    if (!string.IsNullOrEmpty(n)) return n;
+                }
+            }
+            catch { }
+            return root != null ? root.name : "?";
+        }
+
+        /// <summary>组的排序权重，没填钩子时恒为同一个值（排序行为不变）。</summary>
+        private static int GroupPriority(Transform root)
+        {
+            try
+            {
+                var f = A11yHost.GameGroupPriority;
+                if (root != null && f != null) return f(root);
+            }
+            catch { }
+            return 100;
+        }
+
+        /// <summary>
+        /// 进组播报。**这一段是本作最关键的可操作性修复**：
+        ///
+        /// 平台层原来只说「导航模式，第 N 组，共 M 项」—— 玩家既不知道总共有几组，
+        /// 也不知道别的组是什么，于是「找不到想去的地方」。本作实测默认状态有 4 组、
+        /// 而最常用的功能条在**第 2 组**，不换组就永远够不着。
+        ///
+        /// 现在：进导航时报一次**全组总览**，之后每次换组报「第 N / 共几组：组名，几项」。
+        /// </summary>
         private static void AnnounceGroup(bool withCount)
         {
             if (Groups.Count == 0 || Items.Count == 0) return;
-            string prefix = withCount
-                ? ("导航模式，第 " + (_groupIndex + 1) + " 组，共 " + Items.Count + " 项。")
-                : "";
+            string prefix = withCount ? GroupPrefix(true) : "";
             Announce(prefix);
+        }
+
+        private static string GroupPrefix(bool verbose)
+        {
+            string gname = GroupName(Groups[_groupIndex].Root);
+            var sb = new StringBuilder();
+            if (Groups.Count <= 1)
+            {
+                if (verbose) sb.Append("导航模式，").Append(gname).Append("，共 ").Append(Items.Count).Append(" 项。");
+                return sb.ToString();
+            }
+            if (verbose) sb.Append("导航模式。");
+            sb.Append("第 ").Append(_groupIndex + 1).Append(" / ").Append(Groups.Count).Append(" 组：")
+              .Append(gname).Append("，").Append(Items.Count).Append(" 项。");
+            if (verbose)
+            {
+                sb.Append("全部 ").Append(Groups.Count).Append(" 组：");
+                int shown = 0;
+                for (int i = 0; i < Groups.Count && shown < 6; i++)
+                {
+                    if (Groups[i].Items.Count == 0) continue;
+                    if (shown > 0) sb.Append('；');
+                    sb.Append(i == _groupIndex ? "【" : "").Append(GroupName(Groups[i].Root))
+                      .Append(' ').Append(Groups[i].Items.Count).Append(" 项").Append(i == _groupIndex ? "】" : "");
+                    shown++;
+                }
+                sb.Append("。用 PageUp / PageDown 换组。");
+            }
+            return sb.ToString();
         }
 
         private static void Announce(string prefix)

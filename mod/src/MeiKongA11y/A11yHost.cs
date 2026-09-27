@@ -1,6 +1,8 @@
 using System;
 using BepInEx.Configuration;
 using BepInEx.Logging;
+using UnityEngine;
+using UnityEngine.UI;
 
 namespace MeiKongA11y
 {
@@ -174,6 +176,42 @@ namespace MeiKongA11y
 
         /// <summary>导航模式是否要接管这一下「回车 / 空格」的 submit（对应 UiNav.ShouldMuteUnitySubmit）。</summary>
         internal static Func<bool> ShouldMuteUnitySubmit;
+
+        // ====================================================================
+        // 三种「逐作界面标签」钩子（《妹控计划》起新增，可回流到其它作）
+        //
+        // 背景：平台层原来的取值顺序是「子树文字 → 同行兄弟文字 → 别名表 → 对象名兜底」。
+        // 《妹控计划》实测：全屏 173 个可交互控件里有 **131 个读不到文字**，只能退化成
+        // 对象名（CommonCloseButton / Button (6) / CCPlus / VolumeButton …）；
+        // 而且同名控件在不同面板里含义不同（CommonButton 在番茄钟里是「停止/暂停/下一个」），
+        // 光靠「对象名 → 中文」的平表根本区分不开 —— 必须能看**路径**。
+        //
+        // 这三个钩子只增不改：平台层原有的取值顺序一条不动，只是在「别名表之后、
+        // 对象名兜底之前」多问一句；钩子没填（其它三作）时行为与从前逐字节一致。
+        // ====================================================================
+
+        /// <summary>
+        /// 「这段文字是预制体占位，别念」。平台层每读到一段文本都会问一次。
+        ///
+        /// 本作实例：`New Text` / `Button` / `音效名称` 这些是预制体上没被运行时替换掉的
+        /// 默认字，念出来比念对象名还糟 —— 玩家会以为那真的叫「New Text」。
+        /// </summary>
+        internal static Func<string, bool> GameTextIsNoise;
+
+        /// <summary>
+        /// 逐作标签解析：平台层在「别名表也没命中」时问它，命中就用它，否则才退回对象名。
+        /// 参数是控件本身，实现方可以看**完整路径**、组件类型、兄弟序号。
+        /// </summary>
+        internal static Func<Selectable, string> GameLabelOf;
+
+        /// <summary>面板组的中文名（平台层默认念 Canvas 下的顶层祖先名，如 `Right` / `UpRight`）。</summary>
+        internal static Func<Transform, string> GameGroupName;
+
+        /// <summary>
+        /// 面板组的排序权重，**小的排前面**。默认（没填）时平台层保持原来的排序。
+        /// 本作用途：把最常用的「功能条」排到第一组，玩家进导航按第一下就能到。
+        /// </summary>
+        internal static Func<Transform, int> GameGroupPriority;
 
         // ====================================================================
         // 自检
