@@ -184,6 +184,8 @@ namespace MeiKongA11yProbe
             bool opened = false, navToggled = false, deskPetOn = false, exitTried = false, facesExported = false;
             float FacesAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_FACES_AT"), 0f);
             float MiniAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_MINI_AT"), 0f);
+            bool repeated = false;
+            float RepeatAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_REPEAT_AT"), 0f);
             int miniStep = 0;
             float DeskPetAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_DESKPET_AT"), 0f);
             float ExitAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_EXIT_AT"), 0f);
@@ -212,6 +214,11 @@ namespace MeiKongA11yProbe
                 {
                     try { DriveMinigame(miniStep); } catch (Exception e) { Say("驱动小游戏失败: " + e.Message); }
                     miniStep++;
+                }
+                if (!repeated && RepeatAt > 0f && (Time.realtimeSinceStartup - _startedAt) >= RepeatAt)
+                {
+                    repeated = true;
+                    try { CallA11yRepeat(); } catch (Exception e) { Say("重读失败: " + e.Message); }
                 }
                 if (!facesExported && FacesAt > 0f && (Time.realtimeSinceStartup - _startedAt) >= FacesAt)
                 {
@@ -711,6 +718,24 @@ namespace MeiKongA11yProbe
             if (m == null) { Say("[模式] 找不到 " + methodName); return; }
             m.Invoke(arr[0], null);
             Say("[模式] 已调用 " + methodName + "（" + label + "）");
+        }
+
+        /// <summary>调用 a11y 补丁的重读逻辑（等价于玩家按退格）。</summary>
+        private static void CallA11yRepeat()
+        {
+            Type t = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try { t = asm.GetType("MeiKongA11y.Reader", false); } catch { }
+                if (t != null) break;
+            }
+            if (t == null) { Say("[重读] 找不到 MeiKongA11y.Reader"); return; }
+            var f = t.GetField("HasChoicesBuffered", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+            var pi = t.GetProperty("HasChoicesBuffered", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+            bool hasChoices = f != null ? (bool)f.GetValue(null) : (pi != null && (bool)pi.GetValue(null, null));
+            Say("[重读] 调用 Repeat()，此刻缓冲区里有选项 = " + hasChoices);
+            var m = t.GetMethod("Repeat", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+            if (m != null) m.Invoke(null, null);
         }
 
         /// <summary>调用 a11y 补丁的保命键逻辑（Pet.ExitDeskPet）。</summary>

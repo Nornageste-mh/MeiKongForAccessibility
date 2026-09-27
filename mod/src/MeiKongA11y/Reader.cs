@@ -30,6 +30,43 @@ namespace MeiKongA11y
         internal static bool LastHadVoice;
         internal static bool LastWasSpoken;
 
+        // ==================================================================
+        // 重读缓冲区
+        //
+        // === 这一条是被玩家当场抓出来的（前三作踩过同一个坑）===
+        //
+        // 《钟塔》0.1.0.1 的复盘原话：「**根因是「重读缓冲区」的覆盖面不全**
+        // —— 选项播报绕过了缓冲区，所以停在选项上按退格什么也念不出来。」
+        //
+        // 本作第一版又犯了同一个错：`Choices.Ready()` 直接调播报、没进缓冲区，
+        // 于是有选项时按退格念的是**上一句台词**（或者干脆没反应）。
+        //
+        // 规矩定死：**凡是玩家可能想重听的东西，都要进缓冲区。**
+        //   · 台词（有配音的也进 —— 补丁只是不自动念它，玩家主动按退格仍然要响应）
+        //   · 选项列表（只在选项还挂着的时候有效）
+        // 选项被清掉之后（选完了 / 段落结束），缓冲区**退回台词**，
+        // 免得之后每次按退格都去念那几个已经不存在的选项。
+        // ==================================================================
+
+        private static string _choicesText = "";
+        private static bool _choicesPending;
+
+        /// <summary>选项出现时把整段选项文本放进缓冲区（由 Choices.Ready 调用）。</summary>
+        internal static void SetChoices(string text)
+        {
+            _choicesText = text ?? "";
+            _choicesPending = _choicesText.Length > 0;
+        }
+
+        /// <summary>选项没了（选完了 / 段落结束）—— 缓冲区退回台词。</summary>
+        internal static void ClearChoices()
+        {
+            _choicesText = "";
+            _choicesPending = false;
+        }
+
+        internal static bool HasChoicesBuffered { get { return _choicesPending; } }
+
         private static float _lastAt = -100f;
         private static string _lastKey = "";
 
@@ -75,15 +112,23 @@ namespace MeiKongA11y
             catch (Exception e) { A11yHost.Diag("[朗读] OnLine 异常: " + e.Message); }
         }
 
-        /// <summary>重读当前句（重读键 / 有配音行的唯一朗读通路）。</summary>
+        /// <summary>
+        /// 重读（重读键 / 有配音行的唯一朗读通路）。
+        ///
+        /// **选项还挂着的时候优先念选项** —— 那才是玩家此刻最可能需要重听的东西。
+        /// 念的时候**直接走 Speech、不经过播报队列**：退格是玩家的主动请求，
+        /// 让他等配音放完等于没反应（与 `Announcer.Now()` 同一条规矩）。
+        /// </summary>
         internal static void Repeat()
         {
-            if (string.IsNullOrEmpty(LastText))
+            string text = _choicesPending && _choicesText.Length > 0 ? _choicesText : LastText;
+            if (string.IsNullOrEmpty(text))
             {
-                Speech.Speak("还没有可以重读的台词。", true);
+                Speech.Speak("还没有可以重读的内容。", true);
                 return;
             }
-            Speech.Speak(LastText, true);
+            A11yHost.Diag("[重读] " + (_choicesPending ? "选项" : "台词") + " 长度=" + text.Length);
+            Speech.Speak(text, true);
         }
 
         /// <summary>进入新的一段剧情时清掉「上一句」。</summary>
@@ -93,6 +138,7 @@ namespace MeiKongA11y
             LastIndex = -1;
             _lastKey = "";
             LastText = "";
+            ClearChoices();
         }
     }
 }

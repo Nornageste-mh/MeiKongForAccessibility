@@ -71,6 +71,11 @@ namespace MeiKongA11y
             }
             if (Plugin.CfgChoiceHotkeys == null || Plugin.CfgChoiceHotkeys.Value)
                 sb.Append("。按数字键选择。");
+
+            // ★ 先放进重读缓冲区，再播报。
+            //   少了这一步，有选项时按退格就会去念上一句台词 ——
+            //   前三作踩过同一个坑（《钟塔》0.1.0.1 复盘：「选项播报绕过了缓冲区」）。
+            Reader.SetChoices(sb.ToString());
             Announcer.Auto(sb.ToString());     // 选项出现是系统触发的 → 等配音放完再念
         }
 
@@ -82,6 +87,7 @@ namespace MeiKongA11y
             _announced = false;
             _ready = false;
             _announcedCount = 0;
+            Reader.ClearChoices();     // 选项没了 → 重读缓冲区退回台词
         }
 
         internal static bool HasPending

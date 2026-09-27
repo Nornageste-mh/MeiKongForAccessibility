@@ -27,7 +27,7 @@ namespace MeiKongA11y
     ///   · 只有一个场景、旧对话系统是不可达死代码 → 只挂 ShiMeng.DialogueV2 一套。
     ///   · 交互是主战场 → 面板感知 + 功能菜单 + 状态播报（Surfaces.cs）。
     /// </summary>
-    [BepInPlugin(Guid, "妹控计划 A11y Reader", "0.1.0.0")]
+    [BepInPlugin(Guid, "妹控计划 A11y Reader", "0.1.0.1")]
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "meikong.a11y.reader";
