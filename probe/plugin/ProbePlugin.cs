@@ -181,7 +181,9 @@ namespace MeiKongA11yProbe
             bool jumped = false;
             bool poked = false;
             float PokeAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_POKE_AT"), 0f);
-            bool opened = false, navToggled = false;
+            bool opened = false, navToggled = false, deskPetOn = false, exitTried = false;
+            float DeskPetAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_DESKPET_AT"), 0f);
+            float ExitAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_EXIT_AT"), 0f);
             string OpenPanel = Environment.GetEnvironmentVariable("MKPROBE_OPEN_PANEL") ?? "";
             float OpenAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_OPEN_AT"), 20f);
             float NavAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_NAV_AT"), 0f);
@@ -202,6 +204,16 @@ namespace MeiKongA11yProbe
                 {
                     opened = true;
                     try { OpenPanelByName(OpenPanel); } catch (Exception e) { Say("开面板失败: " + e.Message); }
+                }
+                if (!deskPetOn && DeskPetAt > 0f && (Time.realtimeSinceStartup - _startedAt) >= DeskPetAt)
+                {
+                    deskPetOn = true;
+                    try { SwitchMode("SetDeskPetMode", "桌宠模式"); } catch (Exception e) { Say("切桌宠失败: " + e.Message); }
+                }
+                if (!exitTried && ExitAt > 0f && (Time.realtimeSinceStartup - _startedAt) >= ExitAt)
+                {
+                    exitTried = true;
+                    try { CallA11yExitDeskPet(); } catch (Exception e) { Say("保命键失败: " + e.Message); }
                 }
                 if (!navToggled && NavAt > 0f && (Time.realtimeSinceStartup - _startedAt) >= NavAt)
                 {
@@ -500,6 +512,35 @@ namespace MeiKongA11yProbe
             Say("[戳诗萌] 已调用 FireClick（等价于左键点她）");
         }
 
+        /// <summary>直接调游戏自己的显示模式入口（模拟玩家在设置里勾选）。</summary>
+        private static void SwitchMode(string methodName, string label)
+        {
+            var t = typeof(DialogueLine).Assembly.GetType("PetDisplayModeController");
+            if (t == null) { Say("[模式] 找不到 PetDisplayModeController"); return; }
+            var arr = UnityEngine.Object.FindObjectsOfType(t, true);
+            if (arr == null || arr.Length == 0) { Say("[模式] 没有实例"); return; }
+            var m = t.GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance);
+            if (m == null) { Say("[模式] 找不到 " + methodName); return; }
+            m.Invoke(arr[0], null);
+            Say("[模式] 已调用 " + methodName + "（" + label + "）");
+        }
+
+        /// <summary>调用 a11y 补丁的保命键逻辑（Pet.ExitDeskPet）。</summary>
+        private static void CallA11yExitDeskPet()
+        {
+            Type t = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try { t = asm.GetType("MeiKongA11y.Pet", false); } catch { }
+                if (t != null) break;
+            }
+            if (t == null) { Say("[保命键] 找不到 MeiKongA11y.Pet（补丁没装？）"); return; }
+            var m = t.GetMethod("ExitDeskPet", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+            if (m == null) { Say("[保命键] 找不到 ExitDeskPet"); return; }
+            object ok = m.Invoke(null, null);
+            Say("[保命键] ExitDeskPet 返回 " + ok);
+        }
+
         /// <summary>把 a11y 补丁的整份导航表（所有组、所有项、按真实顺序）原样倒出来。</summary>
         private static void DumpNavAll()
         {
@@ -588,6 +629,13 @@ namespace MeiKongA11yProbe
             var sb = new StringBuilder();
             sb.Append("[快照 #").Append(n).Append(" t+").Append(t).Append("s] ");
             sb.Append("scene=").Append(SceneManager.GetActiveScene().name);
+            try
+            {
+                var util = typeof(DialogueLine).Assembly.GetType("PetDeskPetInputUtility");
+                var mi = util?.GetMethod("IsDeskPetActive", BindingFlags.Public | BindingFlags.Static);
+                sb.Append(" 模式=").Append(mi != null && (bool)mi.Invoke(null, null) ? "桌宠" : "全屏");
+            }
+            catch { }
 
             sb.Append(" | V2{playing=").Append(DialoguePlaybackTracker.IsPlaying);
             sb.Append(" box=").Append(DialoguePlaybackTracker.BoxMode);

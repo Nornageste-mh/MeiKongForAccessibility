@@ -56,6 +56,7 @@ namespace MeiKongA11y
         internal static ConfigEntry<bool>   CfgAnnouncePanel;    // 面板开关播报
         internal static ConfigEntry<string> CfgPokeKey;          // 戳一下诗萌（= 左键点她）
         internal static ConfigEntry<string> CfgStoryBtnKey;      // 和诗萌聊聊（互动按钮）
+        internal static ConfigEntry<string> CfgFullScreenKey;    // 保命键：切回全屏
 
         // ---- 其它 ----
         internal static ConfigEntry<bool>   CfgStartupHint;
@@ -135,6 +136,13 @@ namespace MeiKongA11y
                 "按下当前可见的「和诗萌聊聊」按钮（MainStoryTriggerButtonVariant）。\n" +
                 "按钮此刻不可见时会退化为「戳一下诗萌」。");
 
+            CfgFullScreenKey = Config.Bind("交互", "切回全屏（保命键）", "F5",
+                "**任何时候按它都会切回全屏模式**，等价于在设置里勾「全屏」。\n\n" +
+                "为什么需要这个：桌宠模式下游戏会把整个全屏界面（功能条、所有面板、设置）\n" +
+                "整个 SetActive(false)，只剩下一只贴在桌面上的诗萌；右键菜单在当前版本里是空的，\n" +
+                "悬停条又需要鼠标。也就是说——**在游戏自己的界面里没有退路**。\n" +
+                "读屏用户一旦误开桌宠模式，就只能靠这个键回来。");
+
             CfgStartupHint = Config.Bind("其它", "启动时播报", true,
                 "游戏启动后朗读一句「无障碍补丁已加载」，用来确认读屏通路是通的。");
 
@@ -198,7 +206,8 @@ namespace MeiKongA11y
                 try { ready = Speech.Ready(); } catch { }
                 if (!ready) continue;
                 if (CfgStartupHint != null && CfgStartupHint.Value)
-                    Speech.Speak("妹控计划无障碍补丁已加载。F1 功能菜单，F2 播报状态，F3 戳一下诗萌，F4 和她聊聊，Tab 进入界面导航，退格键重读当前句。", true);
+                    Speech.Speak("妹控计划无障碍补丁已加载。F1 功能菜单，F2 播报状态，F3 戳一下诗萌，"
+                             + "F4 和她聊聊，F5 切回全屏，Tab 进入界面导航，退格键重读当前句。", true);
                 yield break;
             }
         }
@@ -227,6 +236,19 @@ namespace MeiKongA11y
                 if (KeyDown(CfgRepeatKey)) Reader.Repeat();
                 if (KeyDown(CfgPokeKey)) Pet.Poke();
                 if (KeyDown(CfgStoryBtnKey)) Pet.ClickStoryButton();
+
+                // 保命键：任何时候按都能切回全屏（桌宠模式下的唯一退路）
+                if (KeyDown(CfgFullScreenKey))
+                {
+                    if (Pet.IsDeskPet())
+                    {
+                        if (Pet.ExitDeskPet()) Speech.Speak("正在切回全屏模式。", true);
+                    }
+                    else
+                    {
+                        Speech.Speak("现在已经是全屏模式。", true);
+                    }
+                }
             }
             catch (Exception e) { A11yHost.Diag("[每帧] Update 异常: " + e.Message); }
         }

@@ -62,6 +62,7 @@ namespace MeiKongA11y
         {
             try
             {
+                Pet.WatchModeChange();
                 AnnouncePanelChange();
                 HandleMenuKeys();
             }

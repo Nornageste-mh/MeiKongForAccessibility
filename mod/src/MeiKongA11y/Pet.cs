@@ -135,6 +135,101 @@ namespace MeiKongA11y
             catch { return ""; }
         }
 
+        internal static bool IsDeskPet()
+        {
+            return DisplayMode() == "桌宠模式";
+        }
+
+        // ==================================================================
+        // ★ 保命键：切回全屏
+        //
+        // === 为什么必须有这个（实机 + 反编译双重确认的**死路**）===
+        //
+        // 桌宠模式下 `PetUiSurfaceSwitcher.RefreshForCurrentMode()` 会把
+        // **整个全屏 shell（desktopShellRoot）SetActive(false)** ——
+        // 功能条、所有面板、设置界面一起消失（UiNav 也扫不到，因为对象根本不激活）。
+        // 那时还剩什么？
+        //   · 桌宠本体（要点得到它得先用鼠标找到它）
+        //   · 悬停条 DeskPetHoverUi（要鼠标悬停才出来）
+        //   · 右键菜单 DeskPetContextMenu —— **实测这个构建里是空的（0 个子节点）**
+        // 于是「回全屏」这条路的唯一入口是设置面板里的三个勾选框，
+        // 而设置面板本身在被隐藏的 shell 里 —— **闭合成死循环**。
+        // 对读屏用户来说，这就是「点错了就再也回不来」。
+        //
+        // 本方法的做法：调用**游戏自己的** `PetDisplayModeController.SetFullScreenMode()`
+        // （就是设置面板里那个「全屏」勾选框背后调的东西），
+        // 所以窗口尺寸、置顶、点击穿透、透明度的收尾全由游戏自己处理，
+        // 我们只是替玩家按了那一下。
+        // ==================================================================
+        internal static bool ExitDeskPet()
+        {
+            try
+            {
+                var asm = typeof(ShiMeng.DialogueV2.DialogueLine).Assembly;
+                var t = asm.GetType("PetDisplayModeController");
+                if (t == null) { Speech.Speak("找不到显示模式控制器。", true); return false; }
+                var arr = Resources.FindObjectsOfTypeAll(t);
+                if (arr == null || arr.Length == 0) { Speech.Speak("找不到显示模式控制器。", true); return false; }
+                object ctl = arr[0];
+
+                // 首选：游戏自己的公开入口（等价于设置面板里勾「全屏」）
+                var m = t.GetMethod("SetFullScreenMode", BindingFlags.Public | BindingFlags.Instance);
+                if (m != null)
+                {
+                    m.Invoke(ctl, null);
+                    A11yHost.Diag("[桌宠] 已调用 PetDisplayModeController.SetFullScreenMode()");
+                    return true;
+                }
+
+                // 回退一：ApplyModeFromSettings(FullScreen)
+                var m2 = t.GetMethod("ApplyModeFromSettings", BindingFlags.Public | BindingFlags.Instance);
+                var modeType = t.GetNestedType("SurfaceMode");
+                if (m2 != null && modeType != null)
+                {
+                    object full = Enum.Parse(modeType, "FullScreen");
+                    m2.Invoke(ctl, new[] { full });
+                    A11yHost.Diag("[桌宠] 已回退到 ApplyModeFromSettings(FullScreen)");
+                    return true;
+                }
+
+                Speech.Speak("这个版本的游戏没有提供切回全屏的入口。", true);
+                return false;
+            }
+            catch (Exception e)
+            {
+                A11yHost.Diag("[桌宠] ExitDeskPet 异常: " + e.Message);
+                Speech.Speak("切回全屏时出错了。", true);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 盯着显示模式的变化，切了就主动说一句。
+        ///
+        /// 这一条是**预防**：玩家（尤其是读屏用户）在设置里勾到「桌宠」时，
+        /// 往往不知道接下来会发生什么 —— 界面会整片消失。
+        /// 主动播报里必须带上「按 F5 切回全屏」，否则他连退路都不知道。
+        /// </summary>
+        private static string _lastMode = "";
+
+        internal static void WatchModeChange()
+        {
+            try
+            {
+                string now = DisplayMode();
+                if (string.IsNullOrEmpty(now) || now == _lastMode) return;
+                bool first = _lastMode.Length == 0;
+                _lastMode = now;
+                if (first) return;                      // 开局那次不念，免得吵
+                if (now == "桌宠模式")
+                    Speech.Speak("已进入桌宠模式。全屏界面已经收起，功能条和面板都看不见了。"
+                                 + "随时按 F5 切回全屏。", true);
+                else
+                    Speech.Speak("已切回全屏模式。", true);
+            }
+            catch { }
+        }
+
         /// <summary>
         /// 「和诗萌聊聊」按钮组：`MainStoryTriggerButtonVariant`（实机 5 个变体，标签都取自
         /// `Label` 属性 —— variantLabel 为空时回退到对象名，所以别指望对象名有意义）。
