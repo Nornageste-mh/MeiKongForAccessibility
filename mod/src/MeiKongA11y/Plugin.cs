@@ -169,7 +169,11 @@ namespace MeiKongA11y
             A11yHost.ShouldMuteUnitySubmit = () => UiNav.ShouldMuteUnitySubmit;
             A11yHost.TickUiNav = () =>
             {
-                if (CfgMenuNav != null && CfgMenuNav.Value) UiNav.Update();
+                // 记忆翻牌是 4×4 网格：方向键要在网格上走，线性遍历不适用，
+                // 所以小游戏开着的时候由 Minigame 接管方向键，UiNav 让位（选项与面板感知照常）。
+                if (Minigame.IsActive()) Minigame.Update();
+                else if (CfgMenuNav != null && CfgMenuNav.Value) UiNav.Update();
+
                 Choices.Update();
                 Surfaces.Tick();
             };

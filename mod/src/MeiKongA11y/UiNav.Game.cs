@@ -60,6 +60,11 @@ namespace MeiKongA11y
             if (s == null) return "";
             try
             {
+                // 记忆翻牌的牌：对象名 Card_N 没有语义、牌面是纯图片
+                // → 交给 Minigame 报「第几行第几列 + 此刻状态」
+                var card = s.GetComponent<ShiMeng.Minigames.MemoryMatch.MemoryMatchCardView>();
+                if (card != null) return Minigame.CardLabel(card);
+
                 string name = s.gameObject.name ?? "";
                 string path = PathOfLabel(s.transform);
 

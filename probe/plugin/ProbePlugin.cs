@@ -181,7 +181,10 @@ namespace MeiKongA11yProbe
             bool jumped = false;
             bool poked = false;
             float PokeAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_POKE_AT"), 0f);
-            bool opened = false, navToggled = false, deskPetOn = false, exitTried = false;
+            bool opened = false, navToggled = false, deskPetOn = false, exitTried = false, facesExported = false;
+            float FacesAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_FACES_AT"), 0f);
+            bool miniDriven = false;
+            float MiniAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_MINI_AT"), 0f);
             float DeskPetAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_DESKPET_AT"), 0f);
             float ExitAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_EXIT_AT"), 0f);
             string OpenPanel = Environment.GetEnvironmentVariable("MKPROBE_OPEN_PANEL") ?? "";
@@ -204,6 +207,16 @@ namespace MeiKongA11yProbe
                 {
                     opened = true;
                     try { OpenPanelByName(OpenPanel); } catch (Exception e) { Say("开面板失败: " + e.Message); }
+                }
+                if (!miniDriven && MiniAt > 0f && (Time.realtimeSinceStartup - _startedAt) >= MiniAt)
+                {
+                    miniDriven = true;
+                    try { DriveMinigame(); } catch (Exception e) { Say("驱动小游戏失败: " + e.Message); }
+                }
+                if (!facesExported && FacesAt > 0f && (Time.realtimeSinceStartup - _startedAt) >= FacesAt)
+                {
+                    facesExported = true;
+                    try { ExportCardFaces(); } catch (Exception e) { Say("导牌面失败: " + e.Message); }
                 }
                 if (!deskPetOn && DeskPetAt > 0f && (Time.realtimeSinceStartup - _startedAt) >= DeskPetAt)
                 {
@@ -510,6 +523,179 @@ namespace MeiKongA11yProbe
             if (m == null) { Say("[戳诗萌] 找不到 FireClick"); return; }
             m.Invoke(arr[0], null);
             Say("[戳诗萌] 已调用 FireClick（等价于左键点她）");
+        }
+
+        /// <summary>
+        /// 把记忆翻牌的 8 张牌面（与牌背）导成 PNG，供人来看图起名。
+        /// 牌面是 Sprite，一个字都没有 —— 名字只能靠看。
+        /// 产物落在 BepInEx/cardfaces/，属于游戏美术资源，**不入库**。
+        /// </summary>
+        private static void ExportCardFaces()
+        {
+            const BindingFlags F = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var asm = typeof(DialogueLine).Assembly;
+            var skinType = asm.GetType("ShiMeng.Minigames.MemoryMatch.MemoryMatchCardSkin");
+            var dir = Path.Combine(Paths.GameRootPath, "BepInEx", "cardfaces");
+            Directory.CreateDirectory(dir);
+            Say("");
+            Say("################ 牌面导出 ################");
+            if (skinType == null) { Say("找不到 MemoryMatchCardSkin"); return; }
+            var objs = Resources.FindObjectsOfTypeAll(skinType);
+            Say("MemoryMatchCardSkin 实例数 = " + objs.Length);
+            if (objs.Length == 0) Say("（CardSkin 模式未使用；下面走 PairPrefabs / 场景实例）");
+
+            // ---- 来源 2：MemoryMatchUIView.pairCardPrefabs（本作实际用的模式）----
+            var viewType = asm.GetType("ShiMeng.Minigames.MemoryMatch.MemoryMatchUIView");
+            var cardType = asm.GetType("ShiMeng.Minigames.MemoryMatch.MemoryMatchCardView");
+            Say("MemoryMatchUIView = " + (viewType != null) + " / MemoryMatchCardView = " + (cardType != null));
+            if (viewType != null)
+            {
+                var views = Resources.FindObjectsOfTypeAll(viewType);
+                Say("MemoryMatchUIView 实例数 = " + views.Length);
+                foreach (var v in views)
+                {
+                    var modeF = viewType.GetField("cardArtMode", F);
+                    if (modeF != null) Say("  cardArtMode = " + modeF.GetValue(v));
+                    var pfF = viewType.GetField("pairCardPrefabs", F);
+                    var pf = pfF != null ? pfF.GetValue(v) as Array : null;
+                    if (pf == null) { Say("  pairCardPrefabs 为空"); continue; }
+                    Say("  pairCardPrefabs.Length = " + pf.Length);
+                    for (int i = 0; i < pf.Length; i++)
+                    {
+                        var cv = pf.GetValue(i) as Component;
+                        if (cv == null) { Say("    #" + i + " (null)"); continue; }
+                        DumpCardView(cardType, cv, "prefab" + i, i, dir);
+                    }
+                }
+            }
+
+            // ---- 来源 3：场上真正在用的牌（**按屏幕位置排序**，用来钉死 Card_N ↔ 行列）----
+            if (cardType != null)
+            {
+                var cards = Resources.FindObjectsOfTypeAll(cardType);
+                Say("场上 MemoryMatchCardView 数 = " + cards.Length);
+                var list = new List<(string name, float x, float y, string front)>();
+                foreach (var c in cards)
+                {
+                    var cv = c as Component;
+                    if (cv == null) continue;
+                    var rt = cv.transform as RectTransform;
+                    Vector3 sp = rt != null ? rt.position : Vector3.zero;
+                    var fi = cardType.GetField("frontImage", F);
+                    var img = fi != null ? fi.GetValue(cv) as UnityEngine.UI.Image : null;
+                    list.Add((cv.gameObject.name, sp.x, sp.y, img != null && img.sprite != null ? img.sprite.name : "?"));
+                }
+                // 屏幕坐标：先上后下、同行先左后右（与 UiNav 的排序口径一致）
+                list.Sort((a, b) =>
+                {
+                    int ay = Mathf.RoundToInt(a.y / 4f), by = Mathf.RoundToInt(b.y / 4f);
+                    if (ay != by) return by.CompareTo(ay);
+                    return a.x.CompareTo(b.x);
+                });
+                Say("---- 牌位（按屏幕位置：上→下、左→右）----");
+                int i2 = 0;
+                foreach (var it in list)
+                {
+                    if (i2++ >= 20) break;
+                    Say("    " + i2 + ". " + it.name + "  屏幕(" + (int)it.x + "," + (int)it.y + ")  front=" + it.front);
+                }
+            }
+            foreach (var o in objs)
+            {
+                var frontField = skinType.GetField("pairFronts", F);
+                var backField = skinType.GetField("cardBack", F);
+                var backs = backField != null ? backField.GetValue(o) as Sprite : null;
+                if (backs != null) SaveSprite(backs, Path.Combine(dir, "back_" + Sanitize(backs.name) + ".png"));
+                var arr = frontField != null ? frontField.GetValue(o) as Array : null;
+                if (arr == null) { Say("pairFronts 为空"); continue; }
+                Say("pairFronts.Length = " + arr.Length);
+                for (int i = 0; i < arr.Length; i++)
+                {
+                    var sp = arr.GetValue(i) as Sprite;
+                    if (sp == null) { Say("  #" + i + " (null)"); continue; }
+                    string file = Path.Combine(dir, "pair" + i + "_" + Sanitize(sp.name) + ".png");
+                    SaveSprite(sp, file);
+                    Say("  #" + i + " sprite=" + sp.name + " tex=" + (sp.texture != null ? sp.texture.name : "?")
+                        + " rect=" + sp.rect.width + "x" + sp.rect.height);
+                }
+            }
+            Say("导出目录: " + dir);
+        }
+
+        /// <summary>从一张牌视图里把牌面 Sprite 抠出来存成 PNG。</summary>
+        private static void DumpCardView(Type cardType, Component cv, string tag, int idx, string dir)
+        {
+            try
+            {
+                const BindingFlags F = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                var frontF = cardType.GetField("frontImage", F);
+                var backF = cardType.GetField("backImage", F);
+                var front = frontF != null ? frontF.GetValue(cv) as UnityEngine.UI.Image : null;
+                var back = backF != null ? backF.GetValue(cv) as UnityEngine.UI.Image : null;
+                string fn = front != null && front.sprite != null ? front.sprite.name : "(无)";
+                string bn = back != null && back.sprite != null ? back.sprite.name : "(无)";
+                Say("    " + tag + "[" + idx + "] " + cv.gameObject.name
+                    + "  front=" + fn + "  back=" + bn);
+                if (front != null && front.sprite != null)
+                    SaveSprite(front.sprite, Path.Combine(dir, tag + idx + "_front_" + Sanitize(front.sprite.name) + ".png"));
+                if (back != null && back.sprite != null && idx == 0)
+                    SaveSprite(back.sprite, Path.Combine(dir, "back_" + Sanitize(back.sprite.name) + ".png"));
+            }
+            catch (Exception e) { Say("    " + tag + "[" + idx + "] 失败: " + e.Message); }
+        }
+
+        private static string Sanitize(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "unnamed";
+            var sb = new StringBuilder();
+            foreach (char c in s) sb.Append(char.IsLetterOrDigit(c) || c == '_' || c == '-' ? c : '_');
+            return sb.ToString();
+        }
+
+        private static void SaveSprite(Sprite sp, string path)
+        {
+            try
+            {
+                Texture2D tex = sp.texture;
+                if (tex == null) { Say("  纹理为空: " + sp.name); return; }
+                Rect r = sp.rect;
+                int w = Mathf.Max(1, (int)r.width), h = Mathf.Max(1, (int)r.height);
+                var rt = RenderTexture.GetTemporary(tex.width, tex.height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+                var prev = RenderTexture.active;
+                Graphics.Blit(tex, rt);
+                RenderTexture.active = rt;
+                var copy = new Texture2D(w, h, TextureFormat.RGBA32, false);
+                copy.ReadPixels(new Rect(r.x, r.y, w, h), 0, 0);
+                copy.Apply();
+                RenderTexture.active = prev;
+                RenderTexture.ReleaseTemporary(rt);
+                File.WriteAllBytes(path, copy.EncodeToPNG());
+                UnityEngine.Object.Destroy(copy);
+            }
+            catch (Exception e) { Say("  存 PNG 失败(" + sp.name + "): " + e.Message); }
+        }
+
+        /// <summary>驱动补丁的小游戏层：右移一格 → 下移一格 → 翻牌（等价于玩家按方向键与回车）。</summary>
+        private static void DriveMinigame()
+        {
+            Type t = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try { t = asm.GetType("MeiKongA11y.Minigame", false); } catch { }
+                if (t != null) break;
+            }
+            if (t == null) { Say("[小游戏] 找不到 MeiKongA11y.Minigame"); return; }
+            const BindingFlags F = BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public;
+            var isActive = t.GetMethod("IsActive", F);
+            Say("[小游戏] IsActive = " + (isActive != null ? isActive.Invoke(null, null) : "?"));
+            var move = t.GetMethod("Move", F);
+            var flip = t.GetMethod("FlipCurrent", F);
+            if (move != null)
+            {
+                move.Invoke(null, new object[] { 1, 0 }); Say("[小游戏] 调用 Move(右)");
+                move.Invoke(null, new object[] { 0, 1 }); Say("[小游戏] 调用 Move(下)");
+            }
+            if (flip != null) { flip.Invoke(null, null); Say("[小游戏] 调用 FlipCurrent()"); }
         }
 
         /// <summary>直接调游戏自己的显示模式入口（模拟玩家在设置里勾选）。</summary>
