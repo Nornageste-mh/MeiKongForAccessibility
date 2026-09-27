@@ -183,8 +183,8 @@ namespace MeiKongA11yProbe
             float PokeAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_POKE_AT"), 0f);
             bool opened = false, navToggled = false, deskPetOn = false, exitTried = false, facesExported = false;
             float FacesAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_FACES_AT"), 0f);
-            bool miniDriven = false;
             float MiniAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_MINI_AT"), 0f);
+            int miniStep = 0;
             float DeskPetAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_DESKPET_AT"), 0f);
             float ExitAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_EXIT_AT"), 0f);
             string OpenPanel = Environment.GetEnvironmentVariable("MKPROBE_OPEN_PANEL") ?? "";
@@ -208,10 +208,10 @@ namespace MeiKongA11yProbe
                     opened = true;
                     try { OpenPanelByName(OpenPanel); } catch (Exception e) { Say("开面板失败: " + e.Message); }
                 }
-                if (!miniDriven && MiniAt > 0f && (Time.realtimeSinceStartup - _startedAt) >= MiniAt)
+                if (MiniAt > 0f && (Time.realtimeSinceStartup - _startedAt) >= MiniAt + miniStep * 4f && miniStep < 6)
                 {
-                    miniDriven = true;
-                    try { DriveMinigame(); } catch (Exception e) { Say("驱动小游戏失败: " + e.Message); }
+                    try { DriveMinigame(miniStep); } catch (Exception e) { Say("驱动小游戏失败: " + e.Message); }
+                    miniStep++;
                 }
                 if (!facesExported && FacesAt > 0f && (Time.realtimeSinceStartup - _startedAt) >= FacesAt)
                 {
@@ -676,7 +676,7 @@ namespace MeiKongA11yProbe
         }
 
         /// <summary>驱动补丁的小游戏层：右移一格 → 下移一格 → 翻牌（等价于玩家按方向键与回车）。</summary>
-        private static void DriveMinigame()
+        private static void DriveMinigame(int step)
         {
             Type t = null;
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
@@ -686,16 +686,18 @@ namespace MeiKongA11yProbe
             }
             if (t == null) { Say("[小游戏] 找不到 MeiKongA11y.Minigame"); return; }
             const BindingFlags F = BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public;
-            var isActive = t.GetMethod("IsActive", F);
-            Say("[小游戏] IsActive = " + (isActive != null ? isActive.Invoke(null, null) : "?"));
             var move = t.GetMethod("Move", F);
             var flip = t.GetMethod("FlipCurrent", F);
-            if (move != null)
+            var act = "";
+            switch (step)
             {
-                move.Invoke(null, new object[] { 1, 0 }); Say("[小游戏] 调用 Move(右)");
-                move.Invoke(null, new object[] { 0, 1 }); Say("[小游戏] 调用 Move(下)");
+                case 0: act = "FlipCurrent(第1张)"; if (flip != null) flip.Invoke(null, null); break;
+                case 1: act = "Move(右)";           if (move != null) move.Invoke(null, new object[] { 1, 0 }); break;
+                case 2: act = "FlipCurrent(第2张)"; if (flip != null) flip.Invoke(null, null); break;
+                case 3: act = "Move(下)";           if (move != null) move.Invoke(null, new object[] { 0, 1 }); break;
+                default: return;
             }
-            if (flip != null) { flip.Invoke(null, null); Say("[小游戏] 调用 FlipCurrent()"); }
+            Say("[小游戏] step" + step + " → " + act);
         }
 
         /// <summary>直接调游戏自己的显示模式入口（模拟玩家在设置里勾选）。</summary>

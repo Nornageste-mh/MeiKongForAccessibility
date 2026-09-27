@@ -106,10 +106,78 @@ namespace MeiKongA11y
                     return;
                 }
 
+                WatchBoard();        // 牌面状态迁移 —— 这是「及时」的核心
                 AnnounceIfChanged();
                 HandleKeys();
             }
             catch (Exception e) { A11yHost.Diag("[小游戏] Update 异常: " + e.Message); }
+        }
+
+        // ==================================================================
+        // 牌面状态迁移播报 —— **这一层是「及时」的关键**
+        //
+        // 正常人玩这个游戏，靠的是「看到牌翻开的那一瞬间」：
+        //   · 自己翻的牌是什么
+        //   · 诗萌翻的两张是什么（她翻的时候他也在看）
+        //   · 这一对成不成、盖回去没有
+        // 这些全是**抬眼就看到的**，所以播报它们不算作弊；
+        // 而不播报，盲人就等于闭着眼睛在玩。
+        //
+        // 做法：每帧比对 16 张牌的 `MemoryMatchCardState`（16 次枚举读取，开销可忽略），
+        // 只对**发生变化**的那几张说话。用 `Announcer.Soon()` 而不是 `Auto()`：
+        // 这些信息过几秒就作废，最多等配音 2.5 秒，宁可轻微重叠也不能迟到。
+        // ==================================================================
+        private static readonly MemoryMatchCardState[] _prevState = new MemoryMatchCardState[16];
+        private static readonly bool[] _prevValid = new bool[16];
+
+        private static void WatchBoard()
+        {
+            var b = Board;
+            if (b == null) return;
+            var who = Turn == MemoryMatchSide.Player ? "你" : "诗萌";
+            var flipped = new List<string>();   // 「第 X 行第 Y 列：图案」
+            var matched = new List<string>();
+            int hidden = 0;                     // 翻回去的张数
+
+            for (int i = 0; i < 16; i++)
+            {
+                MemoryMatchCardState now;
+                try { now = b.GetState(i); } catch { continue; }
+                if (!_prevValid[i]) { _prevValid[i] = true; _prevState[i] = now; continue; }
+                var was = _prevState[i];
+                if (now == was) continue;
+                _prevState[i] = now;
+
+                if (now == MemoryMatchCardState.FaceUp)
+                    flipped.Add(PosText(i) + "：" + PairName(b.GetPairId(i)));
+                else if (now == MemoryMatchCardState.Matched)
+                    matched.Add(PairName(b.GetPairId(i)));
+                else if (now == MemoryMatchCardState.FaceDown && was == MemoryMatchCardState.FaceUp)
+                    hidden++;
+            }
+
+            // 同一拍里的迁移合成**一句话**：两张牌各报一次「不是一对」是纯噪音
+            // （玩家刚刚才听过那两张是什么，他要的只是「成了没有」）。
+            if (flipped.Count == 1) Announcer.Soon(who + "翻开" + flipped[0] + "。");
+            else if (flipped.Count > 1) Announcer.Soon(who + "翻开 " + string.Join("、", flipped) + "。");
+
+            if (matched.Count > 0) Announcer.Soon("配对成功，" + string.Join("、", matched) + "。");
+            else if (hidden > 1) Announcer.Soon("没配上，两张都盖回去了。");
+            else if (hidden == 1) Announcer.Soon("没配上，盖回去一张。");
+        }
+
+        /// <summary>牌索引 → 「第 X 行第 Y 列」。行列来自按屏幕位置算出的映射，不是假设。</summary>
+        private static string PosText(int cardIndex)
+        {
+            foreach (var c in _cards)
+            {
+                if (c == null || c.Index != cardIndex) continue;
+                int id = c.GetInstanceID();
+                int r, col;
+                if (_rowOf.TryGetValue(id, out r) && _colOf.TryGetValue(id, out col))
+                    return "第 " + (r + 1) + " 行第 " + (col + 1) + " 列";
+            }
+            return "第 " + (cardIndex + 1) + " 张";
         }
 
         /// <summary>回合 / 比分变化时主动播报（这些正常人抬眼就能看到）。</summary>
@@ -120,12 +188,12 @@ namespace MeiKongA11y
             if (ps != _lastPlayerScore || cs != _lastCpuScore)
             {
                 _lastPlayerScore = ps; _lastCpuScore = cs;
-                Announcer.Auto("比分，哥哥 " + ps + " 分，诗萌 " + cs + " 分。");
+                Announcer.Soon("比分，哥哥 " + ps + " 分，诗萌 " + cs + " 分。", 3f);
             }
             if (turn != _lastTurn)
             {
                 _lastTurn = turn;
-                Announcer.Auto(turn == MemoryMatchSide.Player ? "轮到你了。" : "轮到诗萌了，等她翻。");
+                Announcer.Soon(turn == MemoryMatchSide.Player ? "轮到你了。" : "轮到诗萌了，等她翻。", 3f);
             }
         }
 
@@ -314,6 +382,7 @@ namespace MeiKongA11y
         {
             _announcedStart = false;
             _cards.Clear();
+            for (int i = 0; i < _prevValid.Length; i++) _prevValid[i] = false;
             _lastPlayerScore = _lastCpuScore = -1;
         }
     }

@@ -30,7 +30,13 @@ namespace MeiKongA11y
     {
         private const int MaxPending = 3;
 
-        private static readonly List<string> _pending = new List<string>();
+        private sealed class Item
+        {
+            internal string Text;
+            internal float Deadline;   // <=0 表示不设上限（可以一直等）
+        }
+
+        private static readonly List<Item> _pending = new List<Item>();
         private static DialogueV2Runner _runner;
         private static float _nextTryAt;
 
@@ -64,12 +70,38 @@ namespace MeiKongA11y
             try
             {
                 if (!WaitEnabled || !VoiceBusy()) { Speech.Speak(text, true); return; }
-                if (_pending.Count > 0 && _pending[_pending.Count - 1] == text) return;   // 相邻重复丢掉
-                while (_pending.Count >= MaxPending) _pending.RemoveAt(0);               // 满了丢最旧
-                _pending.Add(text);
-                A11yHost.Diag("[播报] 配音中，排队等它放完: " + text.Substring(0, Math.Min(20, text.Length)) + "…");
+                if (_pending.Count > 0 && _pending[_pending.Count - 1].Text == text) return;  // 相邻重复丢掉
+                while (_pending.Count >= MaxPending) _pending.RemoveAt(0);                    // 满了丢最旧
+                _pending.Add(new Item { Text = text, Deadline = 0f });
+                A11yHost.Diag("[播报] 配音中，排队等它放完: " + Head(text));
             }
             catch (Exception e) { A11yHost.Diag("[播报] Auto 异常: " + e.Message); }
+        }
+
+        /// <summary>
+        /// **时间敏感**的状态播报（小游戏的翻牌结果、诗萌翻了什么、配对成败）。
+        ///
+        /// 与 `Auto()` 的区别只有一个：**等配音最多等 maxWait 秒**。
+        /// 理由：这些信息过几秒就没用了 —— 一句 7 秒的配音把「诗萌翻开第 2 行第 3 列：麦克风」
+        /// 拖到放完才念，玩家早就在等下一步了。宁可轻微重叠，也不能迟到。
+        /// </summary>
+        internal static void Soon(string text, float maxWait = 2.5f)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            try
+            {
+                if (!WaitEnabled || !VoiceBusy()) { Speech.Speak(text, true); return; }
+                if (_pending.Count > 0 && _pending[_pending.Count - 1].Text == text) return;
+                while (_pending.Count >= MaxPending) _pending.RemoveAt(0);
+                _pending.Add(new Item { Text = text, Deadline = UnityEngine.Time.realtimeSinceStartup + maxWait });
+                A11yHost.Diag("[播报] 配音中，限时排队(" + maxWait + "s): " + Head(text));
+            }
+            catch (Exception e) { A11yHost.Diag("[播报] Soon 异常: " + e.Message); }
+        }
+
+        private static string Head(string s)
+        {
+            return s.Length <= 20 ? s : s.Substring(0, 20) + "…";
         }
 
         /// <summary>玩家按键触发的即时反馈：不排队。</summary>
@@ -86,13 +118,18 @@ namespace MeiKongA11y
             if (_pending.Count == 0) return;
             try
             {
-                if (UnityEngine.Time.realtimeSinceStartup < _nextTryAt) return;
-                _nextTryAt = UnityEngine.Time.realtimeSinceStartup + 0.25f;
-                if (VoiceBusy()) return;
-                string next = _pending[0];
+                float now = UnityEngine.Time.realtimeSinceStartup;
+                if (now < _nextTryAt) return;
+                _nextTryAt = now + 0.2f;
+
+                Item first = _pending[0];
+                bool overdue = first.Deadline > 0f && now >= first.Deadline;   // 等太久了，不等了
+                if (VoiceBusy() && !overdue) return;
+
                 _pending.RemoveAt(0);
-                A11yHost.Diag("[播报] 配音结束，补报: " + next);
-                Speech.Speak(next, true);
+                A11yHost.Diag(overdue ? "[播报] 限时已到，抢报: " + Head(first.Text)
+                                      : "[播报] 配音结束，补报: " + Head(first.Text));
+                Speech.Speak(first.Text, true);
             }
             catch (Exception e) { A11yHost.Diag("[播报] Tick 异常: " + e.Message); }
         }
