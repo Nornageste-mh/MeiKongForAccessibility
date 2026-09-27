@@ -216,10 +216,10 @@ namespace MeiKongA11y
         {
             int r = Mathf.Clamp(_row + dy, 0, Mathf.Max(0, _rows - 1));
             int c = Mathf.Clamp(_col + dx, 0, Mathf.Max(0, _cols - 1));
-            if (r == _row && c == _col) { Speech.Speak("到头了。", false); return; }
+            if (r == _row && c == _col) { Repeat.Say("到头了。", false); return; }
             _row = r; _col = c;
             var card = CardAt(_row, _col);
-            Speech.Speak("第 " + (_row + 1) + " 行第 " + (_col + 1) + " 列，" + StateWord(card) + "。", true);
+            Repeat.Say("第 " + (_row + 1) + " 行第 " + (_col + 1) + " 列，" + StateWord(card) + "。", true);
         }
 
         /// <summary>回车翻当前这张牌 —— 走游戏自己的 `OnCardClicked(index)`，等价于用鼠标点它。</summary>
@@ -228,12 +228,12 @@ namespace MeiKongA11y
             try
             {
                 var card = CardAt(_row, _col);
-                if (card == null) { Speech.Speak("这里没有牌。", true); return; }
+                if (card == null) { Repeat.Say("这里没有牌。", true); return; }
                 int idx = card.Index;
                 var state = BoardState(idx);
                 if (state != MemoryMatchCardState.FaceDown)
                 {
-                    Speech.Speak(state == MemoryMatchCardState.Matched ? "这张已经配对过了。" : "这张已经翻开了。", true);
+                    Repeat.Say(state == MemoryMatchCardState.Matched ? "这张已经配对过了。" : "这张已经翻开了。", true);
                     return;
                 }
                 if (_ctl != null) _ctl.OnCardClicked(idx);

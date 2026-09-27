@@ -48,24 +48,19 @@ namespace MeiKongA11y
         // 免得之后每次按退格都去念那几个已经不存在的选项。
         // ==================================================================
 
-        private static string _choicesText = "";
-        private static bool _choicesPending;
+        // 缓冲区本体在 L1 的 Repeat.cs 里（0.1.1.0 起）。
+        // 逐作层**只往里塞，绕不过去** —— 由 tools/lint_repeat.ps1 机械保证。
+        // 这里只保留两个薄透传，免得调用方到处写 Repeat。
 
-        /// <summary>选项出现时把整段选项文本放进缓冲区（由 Choices.Ready 调用）。</summary>
-        internal static void SetChoices(string text)
-        {
-            _choicesText = text ?? "";
-            _choicesPending = _choicesText.Length > 0;
-        }
+        private const string ChoicesTag = "meikong.choices";
+
+        /// <summary>选项出现时把整段选项文本设为重读优先项（由 Choices.Ready 调用）。</summary>
+        internal static void SetChoices(string text) { Repeat.Push(text, ChoicesTag); }
 
         /// <summary>选项没了（选完了 / 段落结束）—— 缓冲区退回台词。</summary>
-        internal static void ClearChoices()
-        {
-            _choicesText = "";
-            _choicesPending = false;
-        }
+        internal static void ClearChoices() { Repeat.Drop(ChoicesTag); }
 
-        internal static bool HasChoicesBuffered { get { return _choicesPending; } }
+        internal static bool HasChoicesBuffered { get { return Repeat.HasPriority; } }
 
         private static float _lastAt = -100f;
         private static string _lastKey = "";
@@ -107,7 +102,11 @@ namespace MeiKongA11y
                 A11yHost.Diag("[朗读] " + key + " 配音=" + (LastHadVoice ? "有" : "无")
                               + " 决定=" + (speak ? "念" : "不念") + " 长度=" + text.Length);
 
-                if (speak) Speech.Speak(text, true);
+                // 念的走 Say（播报 + 进缓冲区），不念的也要走 Note（只记不念）——
+                // 有配音的行之所以不自动念，只是不想和配音叠读；
+                // 玩家主动按重读键时**必须**还能听到它，那是这类行唯一的朗读通路。
+                if (speak) Repeat.Say(text);
+                else Repeat.Note(text);
             }
             catch (Exception e) { A11yHost.Diag("[朗读] OnLine 异常: " + e.Message); }
         }
@@ -119,16 +118,12 @@ namespace MeiKongA11y
         /// 念的时候**直接走 Speech、不经过播报队列**：退格是玩家的主动请求，
         /// 让他等配音放完等于没反应（与 `Announcer.Now()` 同一条规矩）。
         /// </summary>
-        internal static void Repeat()
+        internal static void RepeatLast()
         {
-            string text = _choicesPending && _choicesText.Length > 0 ? _choicesText : LastText;
-            if (string.IsNullOrEmpty(text))
-            {
-                Speech.Speak("还没有可以重读的内容。", true);
-                return;
-            }
-            A11yHost.Diag("[重读] " + (_choicesPending ? "选项" : "台词") + " 长度=" + text.Length);
-            Speech.Speak(text, true);
+            // 缓冲区本体在 L1：选项还挂着就念选项、否则念台词，空的时候如实说明。
+            A11yHost.Diag("[重读] " + (Repeat.HasPriority ? "选项" : "台词")
+                          + " 长度=" + (Repeat.Current != null ? Repeat.Current.Length : 0));
+            Repeat.Again();
         }
 
         /// <summary>进入新的一段剧情时清掉「上一句」。</summary>
@@ -138,6 +133,8 @@ namespace MeiKongA11y
             LastIndex = -1;
             _lastKey = "";
             LastText = "";
+            // 只清选项优先项；**不清主缓冲区** ——
+            // 「重读最近听到的内容」跨段落仍然成立，清掉反而让刚进新章时按重读键没反应。
             ClearChoices();
         }
     }

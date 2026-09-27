@@ -156,6 +156,14 @@ namespace MeiKongA11y
         /// 实机排查时把帧号和当前状态一并写下来，才能对上「哪一次按键产生了
         /// 哪几次迁移」。关掉时是一行空判断，没有开销。
         /// </summary>
+        // ================================================================
+        // ★ 本文件里所有对玩家的播报一律走 Repeat.Say —— **不许直接调 Speech.Speak**。
+        //
+        // 理由：直接调 = 玩家按重读键听不到它。这个坑踩过两次
+        // （《钟塔》0.1.0.1「选项播报绕过了缓冲区」/《妹控计划》0.1.0.0 有选项时按退格念不出选项）。
+        // 由 tools\lint_repeat.ps1 机械保证：platform\ 下只有 Repeat.cs 允许出现 Speech.Speak。
+        // ================================================================
+
         private static void Diag(string msg)
         {
             A11yHost.Diag("[UiNav] " + msg);
@@ -174,14 +182,14 @@ namespace MeiKongA11y
             Diag("Enter  frame=" + Time.frameCount);
             if (!SceneStable())
             {
-                Speech.Speak("场景正在切换，请稍候再试。", true);
+                Repeat.Say("场景正在切换，请稍候再试。", true);
                 return;
             }
 
             Scan();
             if (Groups.Count == 0 || Items.Count == 0)
             {
-                Speech.Speak("当前界面上没有可操作的项目。", true);
+                Repeat.Say("当前界面上没有可操作的项目。", true);
                 return;
             }
 
@@ -203,7 +211,7 @@ namespace MeiKongA11y
             ReleaseSelection();
             if (announce)
             {
-                try { Speech.Speak("已退出导航模式。", true); } catch { }
+                try { Repeat.Say("已退出导航模式。", true); } catch { }
             }
         }
 
@@ -1179,14 +1187,14 @@ namespace MeiKongA11y
             // 光标移到别处 = 放弃刚才那次退出确认
             ClearQuitConfirm();
 
-            Speech.Speak(prefix + Describe(s) + "。" + (_index + 1) + " / " + Items.Count, true);
+            Repeat.Say(prefix + Describe(s) + "。" + (_index + 1) + " / " + Items.Count, true);
         }
 
         private static void SwitchGroup(int dir)
         {
             if (Groups.Count <= 1)
             {
-                Speech.Speak("只有一个面板组。", true);
+                Repeat.Say("只有一个面板组。", true);
                 return;
             }
             _groupIndex = (_groupIndex + dir + Groups.Count) % Groups.Count;
@@ -1313,7 +1321,7 @@ namespace MeiKongA11y
                     + TextOf(s) + "」场景 " + SceneManager.GetActiveScene().name);
             }
             catch { }
-            Speech.Speak("这是退出游戏。再按一次回车或空格确认退出，按别的键取消。", true);
+            Repeat.Say("这是退出游戏。再按一次回车或空格确认退出，按别的键取消。", true);
         }
 
         private static void ClearQuitConfirm()
@@ -1336,7 +1344,7 @@ namespace MeiKongA11y
 
             if (!s.interactable)
             {
-                Speech.Speak("该项当前不可用。", true);
+                Repeat.Say("该项当前不可用。", true);
                 return;
             }
 
@@ -1350,7 +1358,7 @@ namespace MeiKongA11y
                     ExitInternal(false);
                     SelectByUs(inf.gameObject);
                     inf.ActivateInputField();
-                    Speech.Speak("已进入输入框，直接打字即可。按 Tab 返回导航。", true);
+                    Repeat.Say("已进入输入框，直接打字即可。按 Tab 返回导航。", true);
                     return;
                 }
 
@@ -1358,7 +1366,7 @@ namespace MeiKongA11y
                 if (t != null)
                 {
                     t.isOn = !t.isOn;
-                    Speech.Speak(t.isOn ? "开" : "关", false);
+                    Repeat.Say(t.isOn ? "开" : "关", false);
                     RequestRescanNextFrame();
                     return;
                 }
@@ -1366,7 +1374,7 @@ namespace MeiKongA11y
                 Slider sl = s as Slider;
                 if (sl != null)
                 {
-                    Speech.Speak("滑条请用左右方向键调整。", true);
+                    Repeat.Say("滑条请用左右方向键调整。", true);
                     return;
                 }
 
@@ -1374,7 +1382,7 @@ namespace MeiKongA11y
                 if (b != null)
                 {
                     string label = TextOf(s);
-                    Speech.Speak("已激活 " + label, false);
+                    Repeat.Say("已激活 " + label, false);
                     _inOurActivation = true;
                     try { b.onClick.Invoke(); }
                     finally { _inOurActivation = false; }
@@ -1432,7 +1440,7 @@ namespace MeiKongA11y
                 float step = (sl.maxValue - sl.minValue) / 20f;
                 if (sl.wholeNumbers) step = Mathf.Max(1f, Mathf.Round(step));
                 sl.value = Mathf.Clamp(sl.value + dir * step, sl.minValue, sl.maxValue);
-                Speech.Speak(SliderValueText(sl), false);
+                Repeat.Say(SliderValueText(sl), false);
             }
             catch (Exception e) { A11yHost.Log.LogError("调整滑条失败: " + e.Message); }
         }

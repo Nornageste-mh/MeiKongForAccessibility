@@ -52,11 +52,11 @@ namespace MeiKongA11y
         internal static bool Poke()
         {
             Probe();
-            if (_clickType == null) { Speech.Speak("找不到诗萌的点击目标，可能游戏改版了。", true); return false; }
+            if (_clickType == null) { Repeat.Say("找不到诗萌的点击目标，可能游戏改版了。", true); return false; }
             try
             {
                 var arr = Resources.FindObjectsOfTypeAll(_clickType);
-                if (arr == null || arr.Length == 0) { Speech.Speak("现在点不到诗萌。", true); return false; }
+                if (arr == null || arr.Length == 0) { Repeat.Say("现在点不到诗萌。", true); return false; }
                 object target = arr[0];
                 if (_fireClick != null)
                 {
@@ -70,7 +70,7 @@ namespace MeiKongA11y
             catch (Exception e)
             {
                 A11yHost.Diag("[桌宠] Poke 异常: " + e.Message);
-                Speech.Speak("戳诗萌的时候出错了。", true);
+                Repeat.Say("戳诗萌的时候出错了。", true);
                 return false;
             }
         }
@@ -167,9 +167,9 @@ namespace MeiKongA11y
             {
                 var asm = typeof(ShiMeng.DialogueV2.DialogueLine).Assembly;
                 var t = asm.GetType("PetDisplayModeController");
-                if (t == null) { Speech.Speak("找不到显示模式控制器。", true); return false; }
+                if (t == null) { Repeat.Say("找不到显示模式控制器。", true); return false; }
                 var arr = Resources.FindObjectsOfTypeAll(t);
-                if (arr == null || arr.Length == 0) { Speech.Speak("找不到显示模式控制器。", true); return false; }
+                if (arr == null || arr.Length == 0) { Repeat.Say("找不到显示模式控制器。", true); return false; }
                 object ctl = arr[0];
 
                 // 首选：游戏自己的公开入口（等价于设置面板里勾「全屏」）
@@ -192,13 +192,13 @@ namespace MeiKongA11y
                     return true;
                 }
 
-                Speech.Speak("这个版本的游戏没有提供切回全屏的入口。", true);
+                Repeat.Say("这个版本的游戏没有提供切回全屏的入口。", true);
                 return false;
             }
             catch (Exception e)
             {
                 A11yHost.Diag("[桌宠] ExitDeskPet 异常: " + e.Message);
-                Speech.Speak("切回全屏时出错了。", true);
+                Repeat.Say("切回全屏时出错了。", true);
                 return false;
             }
         }
@@ -250,7 +250,7 @@ namespace MeiKongA11y
                     if (btn == null || !btn.IsInteractable()) continue;
                     string label = Label(t, obj);
                     btn.onClick.Invoke();
-                    Speech.Speak("已按下：" + label, true);
+                    Repeat.Say("已按下：" + label, true);
                     return true;
                 }
                 // 没有可见的互动按钮 → 等价于直接戳她

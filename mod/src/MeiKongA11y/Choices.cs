@@ -75,8 +75,8 @@ namespace MeiKongA11y
             // ★ 先放进重读缓冲区，再播报。
             //   少了这一步，有选项时按退格就会去念上一句台词 ——
             //   前三作踩过同一个坑（《钟塔》0.1.0.1 复盘：「选项播报绕过了缓冲区」）。
-            Reader.SetChoices(sb.ToString());
-            Announcer.Auto(sb.ToString());     // 选项出现是系统触发的 → 等配音放完再念
+            Reader.SetChoices(sb.ToString());  // 先设为重读优先项（Push 本身不播报）
+            Announcer.Auto(sb.ToString());     // 再由播报队列念（配音在放就等它放完）
         }
 
         /// <summary>选项被清掉（段落结束 / 已选择）。</summary>
@@ -111,7 +111,7 @@ namespace MeiKongA11y
             int idx = oneBased - 1;
             if (idx < 0 || idx >= _callbacks.Count)
             {
-                Speech.Speak("没有第 " + oneBased + " 个选项。", true);
+                Repeat.Say("没有第 " + oneBased + " 个选项。");
                 return;
             }
             string label = idx < _labels.Count ? _labels[idx] : "";

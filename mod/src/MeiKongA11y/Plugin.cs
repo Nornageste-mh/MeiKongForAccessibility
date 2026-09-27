@@ -245,7 +245,7 @@ namespace MeiKongA11y
                 // 热键
                 if (KeyDown(CfgMenuKey)) Surfaces.OpenMenu();
                 if (KeyDown(CfgStateKey)) Surfaces.ReportState();
-                if (KeyDown(CfgRepeatKey)) Reader.Repeat();
+                if (KeyDown(CfgRepeatKey)) Reader.RepeatLast();
                 if (KeyDown(CfgPokeKey)) Pet.Poke();
                 if (KeyDown(CfgStoryBtnKey)) Pet.ClickStoryButton();
 
@@ -254,11 +254,11 @@ namespace MeiKongA11y
                 {
                     if (Pet.IsDeskPet())
                     {
-                        if (Pet.ExitDeskPet()) Speech.Speak("正在切回全屏模式。", true);
+                        if (Pet.ExitDeskPet()) Repeat.Say("正在切回全屏模式。");
                     }
                     else
                     {
-                        Speech.Speak("现在已经是全屏模式。", true);
+                        Repeat.Say("现在已经是全屏模式。");
                     }
                 }
             }

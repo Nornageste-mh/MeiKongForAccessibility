@@ -69,7 +69,7 @@ namespace MeiKongA11y
             if (string.IsNullOrEmpty(text)) return;
             try
             {
-                if (!WaitEnabled || !VoiceBusy()) { Speech.Speak(text, true); return; }
+                if (!WaitEnabled || !VoiceBusy()) { Repeat.Say(text, true); return; }
                 if (_pending.Count > 0 && _pending[_pending.Count - 1].Text == text) return;  // 相邻重复丢掉
                 while (_pending.Count >= MaxPending) _pending.RemoveAt(0);                    // 满了丢最旧
                 _pending.Add(new Item { Text = text, Deadline = 0f });
@@ -90,7 +90,7 @@ namespace MeiKongA11y
             if (string.IsNullOrEmpty(text)) return;
             try
             {
-                if (!WaitEnabled || !VoiceBusy()) { Speech.Speak(text, true); return; }
+                if (!WaitEnabled || !VoiceBusy()) { Repeat.Say(text, true); return; }
                 if (_pending.Count > 0 && _pending[_pending.Count - 1].Text == text) return;
                 while (_pending.Count >= MaxPending) _pending.RemoveAt(0);
                 _pending.Add(new Item { Text = text, Deadline = UnityEngine.Time.realtimeSinceStartup + maxWait });
@@ -108,7 +108,7 @@ namespace MeiKongA11y
         internal static void Now(string text, bool interrupt = true)
         {
             if (string.IsNullOrEmpty(text)) return;
-            try { Speech.Speak(text, interrupt); }
+            try { Repeat.Say(text, interrupt); }
             catch (Exception e) { A11yHost.Diag("[播报] Now 异常: " + e.Message); }
         }
 
@@ -129,7 +129,7 @@ namespace MeiKongA11y
                 _pending.RemoveAt(0);
                 A11yHost.Diag(overdue ? "[播报] 限时已到，抢报: " + Head(first.Text)
                                       : "[播报] 配音结束，补报: " + Head(first.Text));
-                Speech.Speak(first.Text, true);
+                Repeat.Say(first.Text, true);
             }
             catch (Exception e) { A11yHost.Diag("[播报] Tick 异常: " + e.Message); }
         }

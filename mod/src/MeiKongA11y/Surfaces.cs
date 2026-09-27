@@ -205,7 +205,7 @@ namespace MeiKongA11y
             }
             if (_menuNames.Count == 0)
             {
-                Speech.Speak("界面当前不可见，先按 Esc 呼出界面再试。", true);
+                Repeat.Say("界面当前不可见，先按 Esc 呼出界面再试。", true);
                 return;
             }
             var sb = new System.Text.StringBuilder("功能菜单，");

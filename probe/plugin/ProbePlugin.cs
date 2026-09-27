@@ -733,8 +733,8 @@ namespace MeiKongA11yProbe
             var f = t.GetField("HasChoicesBuffered", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
             var pi = t.GetProperty("HasChoicesBuffered", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
             bool hasChoices = f != null ? (bool)f.GetValue(null) : (pi != null && (bool)pi.GetValue(null, null));
-            Say("[重读] 调用 Repeat()，此刻缓冲区里有选项 = " + hasChoices);
-            var m = t.GetMethod("Repeat", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+            Say("[重读] 调用 RepeatLast()，此刻缓冲区里有选项 = " + hasChoices);
+            var m = t.GetMethod("RepeatLast", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
             if (m != null) m.Invoke(null, null);
         }
 
