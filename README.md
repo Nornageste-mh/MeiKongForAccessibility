@@ -319,10 +319,8 @@ ilspycmd -p -o decomp "<游戏目录>\MeiKongProject_Data\Managed\Assembly-CShar
 
 ---
 
-## 许可证
+## 许可
 
-本仓库的**代码与文档**采用 [MIT 许可](LICENSE) 发布。
-附加的**署名要求、非官方声明与免责条款**见 [NOTICE.md](NOTICE.md)。
 
 简要说明：
 
