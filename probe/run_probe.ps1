@@ -20,6 +20,7 @@ param(
     [string]$Jump = '',
     [int]$JumpAt = 30,
     [int]$Choose = 0,
+    [int]$KeysAt = 0,
     [switch]$KeepRunning
 )
 
@@ -51,7 +52,9 @@ $env:SteamGameId = '4169160'
 $env:MKPROBE_JUMP = $Jump
 $env:MKPROBE_JUMP_AT = "$JumpAt"
 $env:MKPROBE_CHOOSE = "$Choose"
+$env:MKPROBE_KEYS_AT = "$KeysAt"
 if ($Jump) { Write-Host ("    自动跳转 = " + $Jump + " @" + $JumpAt + "s  自动选项 = " + $Choose) }
+if ($KeysAt) { Write-Host ("    注入按键场景 @" + $KeysAt + "s（F1 / ESC 两段缓冲）") }
 $p = Start-Process -FilePath $exe -WorkingDirectory $GameDir -PassThru
 Write-Host ("    PID = " + $p.Id)
 

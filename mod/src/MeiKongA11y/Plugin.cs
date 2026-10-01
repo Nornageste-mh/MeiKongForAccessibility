@@ -27,7 +27,7 @@ namespace MeiKongA11y
     ///   · 只有一个场景、旧对话系统是不可达死代码 → 只挂 ShiMeng.DialogueV2 一套。
     ///   · 交互是主战场 → 面板感知 + 功能菜单 + 状态播报（Surfaces.cs）。
     /// </summary>
-    [BepInPlugin(Guid, "妹控计划 A11y Reader", "0.1.0.2")]
+    [BepInPlugin(Guid, "妹控计划 A11y Reader", "0.1.0.3")]
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "meikong.a11y.reader";
@@ -58,6 +58,9 @@ namespace MeiKongA11y
         internal static ConfigEntry<string> CfgStoryBtnKey;      // 和诗萌聊聊（互动按钮）
         internal static ConfigEntry<string> CfgFullScreenKey;    // 保命键：切回全屏
         internal static ConfigEntry<bool>   CfgQueueBehindVoice; // 自动播报是否等配音放完
+        internal static ConfigEntry<string> CfgClosePanelKey;    // 关闭当前面板（小游戏窗口）
+        internal static ConfigEntry<bool>   CfgClosePanelConfirm;// 关窗前是否要按两次
+        internal static ConfigEntry<bool>   CfgBlockRunnerTestKey;// 屏蔽游戏原生的 F1 测试键
 
         // ---- 其它 ----
         internal static ConfigEntry<bool>   CfgStartupHint;
@@ -150,6 +153,26 @@ namespace MeiKongA11y
                 "**只影响系统自动播报**；你按键触发的反馈（F2 状态、选项念读、光标移动）永远立刻说 ——\n" +
                 "你在等答案，排队等于没反应。");
 
+            CfgClosePanelKey = Config.Bind("交互", "关闭面板键", "Escape",
+                "在小游戏窗口里按它 = 关掉这个窗口（等价于用鼠标点窗口的关闭按钮，\n" +
+                "走的是游戏自己的 PetUiIntegrationHub.CloseMinigame()）。\n\n" +
+                "为什么需要它：小游戏面板是桌宠面板系统开的，**不在** UIManager 的返回栈上，\n" +
+                "而运行时场景里根本没有 UIManager 实例 —— 所以游戏自己对 ESC 毫无反应（探针实查）。\n" +
+                "正常人用鼠标点关闭按钮；读屏用户没有鼠标，这个键就是那个按钮。");
+
+            CfgClosePanelConfirm = Config.Bind("交互", "关闭面板前二次确认", true,
+                "开：第一次按关闭键只是「举起来」并提示，再按一次才真的关；中途按其它任意键取消。\n" +
+                "小游戏开局就作废、没有存档点，误触一次就是白玩一局 —— 所以默认要按两次。");
+
+            CfgBlockRunnerTestKey = Config.Bind("交互", "屏蔽游戏原生的 F1 测试键", true,
+                "**这是游戏自己的开发者残留，不是补丁的锅**：\n" +
+                "反编译实查 DialogueV2Runner.Update() —— 整个方法体只有一句：\n" +
+                "    按 F1 → StartScenario( Story_MorningGreeting , … , DialogueTriggerContext.RunnerTest() )\n" +
+                "那个触发器工厂的名字就叫 RunnerTest，参数的默认值直接写着「F1 测试键」。\n" +
+                "也就是说：按 F1 会打断当前剧情、从开局第一句重新播。\n\n" +
+                "开着这一项时，F1 只当补丁的功能菜单用；拦的是「RunnerTest 触发器」这一个入口，\n" +
+                "不碰游戏正常的任何一段剧情。\n" +
+                "关掉它就恢复游戏原样 —— 但那样 F1 会一边念菜单、一边从开局重播。");
             CfgStartupHint = Config.Bind("其它", "启动时播报", true,
                 "游戏启动后朗读一句「无障碍补丁已加载」，用来确认读屏通路是通的。");
 
@@ -194,7 +217,8 @@ namespace MeiKongA11y
             _harmony = new Harmony(Guid);
             foreach (var t in new[] { typeof(Patches.LineChanged), typeof(Patches.ScenarioStarted),
                                       typeof(Patches.ScenarioEnded), typeof(Patches.ChoiceWaiting),
-                                      typeof(Patches.ChoiceBind), typeof(Patches.ChoiceInteractable) })
+                                      typeof(Patches.ChoiceBind), typeof(Patches.ChoiceInteractable),
+                                      typeof(Patches.RunnerTestKey), typeof(Patches.GameBackInput) })
             {
                 try { _harmony.PatchAll(t); A11yHost.Diag("[补丁] " + t.Name + " OK"); }
                 catch (Exception e) { Logger.LogError("[补丁] " + t.Name + " 失败: " + e.Message); }

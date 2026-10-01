@@ -179,6 +179,30 @@ namespace MeiKongA11y
             return null;
         }
 
+        /// <summary>
+        /// 关掉某个面板（走游戏注册表自己的 <c>ClosePanel(string)</c>）。
+        /// 找不到注册表或方法就返回 false —— 调用方自行决定退化路径。
+        /// </summary>
+        internal static bool ClosePanel(string id)
+        {
+            ProbeRegistry();
+            if (_regType == null || string.IsNullOrEmpty(id)) return false;
+            try
+            {
+                var m = _regType.GetMethod("ClosePanel", BindingFlags.Instance | BindingFlags.Public,
+                                           null, new[] { typeof(string) }, null);
+                if (m == null) { A11yHost.Diag("[交互] PetPanelRegistry 没有 ClosePanel(string)"); return false; }
+                foreach (var inst in Resources.FindObjectsOfTypeAll(_regType))
+                {
+                    m.Invoke(inst, new object[] { id });
+                    A11yHost.Diag("[交互] 已关闭面板 " + id);
+                    return true;
+                }
+            }
+            catch (Exception e) { A11yHost.Diag("[交互] 关面板异常: " + e.Message); }
+            return false;
+        }
+
         private static int CountOperable(string id)
         {
             var root = PanelRoot(id);

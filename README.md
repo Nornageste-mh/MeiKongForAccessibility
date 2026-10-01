@@ -158,6 +158,7 @@ Windows SAPI 朗读屏幕上的文字。
 | `F3` | 戳一下诗萌（等价于鼠标左键点她本人） |
 | `F4` | 和诗萌聊聊（按下当前可见的「和诗萌聊聊」按钮） |
 | `F5` | **切回全屏（保命键）** —— 见上面「桌宠模式」那一段 |
+| `Esc` | 在小游戏窗口里**按两次**关掉它（第一次只是举起来并提示，按其它任意键取消） |
 | `1` - `9` | 选择对应编号的选项 |
 | `Backspace` | 重读最近那一句；**有选项时重读选项** |
 | `Tab` | 进入 / 退出界面导航模式 |
@@ -167,11 +168,22 @@ Windows SAPI 朗读屏幕上的文字。
 | `Home` / `End` | 第一项 / 最后一项 |
 | `PageUp` / `PageDown` | 切换面板组 |
 
-**游戏原生占用的键**（模组不会去抢，也不要拿来当重读键）：
-空格 / 回车 / 小键盘回车 / 鼠标滚轮 = 推进剧情，按住 `Ctrl` = 快进，
-`R` = 历史记录，`Esc` / 鼠标右键 = 呼出或收起界面。
+**游戏原生占用的键**：空格 / 回车 / 小键盘回车 / 鼠标滚轮 = 推进剧情，
+按住 `Ctrl` = 快进，`R` = 历史记录。
 
-后五个模组自用的键都可以在配置里改或关掉。
+> **一处订正**：这里原来写「`Esc` / 鼠标右键 = 呼出或收起界面」，**那是错的**。
+> 那是从反编译里读来的，但本作运行时场景里 `UIManager`、`CGPanelManager`、
+> `VideoPanelManager`、`NameInputManagerTMP` 一个都没有（探针场景树实查）——
+> 那几条 ESC 分支全是**不可达的死代码**。全屏界面与小游戏窗口，游戏都不认 ESC。
+> 唯一还认它的是桌宠右键菜单。
+
+> **`F1` 是游戏自己的开发者测试键**，不是我们加的：
+> 反编译实查 `DialogueV2Runner.Update()` 整个方法体只有一句 ——
+> 按 F1 就 `StartScenario("story_1_初见", …, RunnerTest())`，**从开局第一句重播、打断当前剧情**。
+> 补丁默认把它屏蔽掉（配置：`交互` → `屏蔽游戏原生的 F1 测试键`），
+> 所以 F1 只当功能菜单用。想知道细节见 [CHANGELOG](CHANGELOG.md) 的 0.1.0.3。
+
+模组自用的键都可以在配置里改或关掉。
 
 ---
 
@@ -254,6 +266,8 @@ cd mod
 | 切回全屏 | `PetDisplayModeController.SetFullScreenMode()` | 就是设置面板里那个「全屏」勾选框背后调的东西 |
 | 翻牌 | `MemoryMatchGameController.OnCardClicked(int)` | 等价于用鼠标点那张牌 |
 | uGUI submit 通路 | `EventSystem.sendNavigationEvents` 每帧复位为 `false` | 游戏从不读选中态；视频面板会把它置回 true |
+| 屏蔽原生 F1 测试键 | `DialogueV2Runner.StartScenario(string, DialogueBoxMode, DialogueTriggerContext)` 前置，只拒绝 `RunnerTest` 触发器 | 游戏 `Update` 里那句 `Input.GetKeyDown(KeyCode.F1)` 是开发者残留，按一下从开局重播 |
+| 小游戏关窗 | `PetUiIntegrationHub.CloseMinigame()`（＝窗口关闭按钮挂的那个方法），`Esc` 两段缓冲 | 小游戏面板不在 `UIManager` 返回栈上，运行时也没有 `UIManager` 实例，游戏自己不吃 ESC |
 
 ### 几条踩过的坑（改之前请先读）
 
@@ -268,7 +282,19 @@ cd mod
    而 `SetInteractable(true)` 是**每个选项各调一次**，不去重会把选项播报 N 遍。
 5. **GitHub 的 `.gitignore` 规则后面不能跟行内注释**（只在行首认 `#`），
    否则整条规则**静默失效** —— 本项目发布时因此把第三方二进制提进了库，靠提交闸门拦下。
+   **反过来也会出事**：写成 `package/`（带斜杠）会把 `mod/package/` 里**手写的两份发布文档**
+   一起忽略掉 ——「包内安装说明与常见问题按本作实际重写」那次提交因此**一个字都没进去**，
+   而那两份正是玩家真正读到的东西。（于 0.1.0.3 发现：一份早已过时的说明就这样藏在库里没人看见。）
+   正确写法与《钟塔》一致：`/mod/package/*` + `!/mod/package/安装说明.md` + `!/mod/package/常见问题.md`。
 6. **不要用 PowerShell 文本 cmdlet 改源码**；`.ps1` 必须 UTF-8 **带 BOM + CRLF**。
+   编辑器类工具会**悄悄把 BOM 删掉**（本项目踩过两次：`compile_check.ps1` 与 `run_probe.ps1`），
+   之后 5.1 按 GBK 解码、满屏乱码加语法错误。改完 `.ps1` 一定要复查头三字节是不是 `239,187,191`。
+7. **`nameof` 取不到私有方法**：MonoBehaviour 的 `Update` 是私有的，
+   跨类写 `nameof(UIManager.Update)` 直接 `CS0117`（编译期就过不去）。
+   `[HarmonyPatch(typeof(UIManager), "Update")]` 只能写字符串。
+8. **`lint_repeat.ps1` 对逐作目录要加 `-AllowFile Repeat.cs`**。
+   平台层是整份拷进逐作 `src` 目录的，所以逐作那份 `Repeat.cs` 本来就在扫描范围里 ——
+   不加这个参数会把 `Repeat.cs` 自己那 3 处 `Speech.Speak` 报成违规（框架文档里那条逐作用法漏了它）。
 
 ---
 

@@ -60,18 +60,63 @@ namespace MeiKongA11yProbe
             try
             {
                 var h = new Harmony(Guid);
-                Type[] patchClasses = { typeof(ProbePatchesV2), typeof(ProbePatchesLegacy), typeof(ProbePatchesEventSystem) };
+                Type[] patchClasses = { typeof(ProbePatchesV2), typeof(ProbePatchesLegacy), typeof(ProbePatchesEventSystem),
+                                        typeof(ProbePatchesInput) };
                 foreach (var pc in patchClasses)
                 {
                     try { h.PatchAll(pc); Say("Harmony PatchAll " + pc.Name + " : OK"); }
                     catch (Exception ex) { Say("Harmony PatchAll " + pc.Name + " : 失败 — " + ex.GetType().Name + ": " + ex.Message); }
                 }
+                _harmonyForSpeech = h;
+                TryPatchSpeech(h);
             }
             catch (Exception e) { Say("Harmony 异常: " + e); }
 
             ReportPatchTargets();
             ReportBuildScenes();
             StartCoroutine(Loop());
+        }
+
+        /// <summary>
+        /// 观测 a11y 补丁的**唯一播报出口**（MeiKongA11y.Speech.Speak）。
+        /// 逐作层是 internal，探针引用不到，所以这里手工 Patch。挂不上只影响观测，不影响游戏。
+        /// ★ IP 红线：只记长度与「是不是我们自己的提示」，**不记文本**。
+        /// </summary>
+        private static bool TryPatchSpeech(Harmony h)
+        {
+            try
+            {
+                var t = FindType("MeiKongA11y.Speech");
+                if (t == null) return false;            // 补丁还没加载，下轮再试
+                var m = t.GetMethod("Speak", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                if (m == null) { Say("Speech 观测补丁: 找到了类型但没有 Speak"); return true; }
+                var pre = new HarmonyMethod(typeof(ProbePatchesInput).GetMethod("Speech_Pre",
+                    BindingFlags.Static | BindingFlags.NonPublic));
+                h.Patch(m, pre);
+                Say("Speech 观测补丁: OK（" + m.DeclaringType.FullName + "." + m.Name + "）");
+                return true;
+            }
+            catch (Exception e) { Say("Speech 观测补丁失败: " + e.GetType().Name + ": " + e.Message); return true; }
+        }
+
+        /// <summary>补丁比探针晚加载，Awake 时可能还看不到它的类型 —— 所以每轮重试一次。
+        /// 只影响观测（能不能看见「播报出口被调用」），不影响任何被测行为。</summary>
+        private static Harmony _harmonyForSpeech;
+        private static bool _speechPatched;
+
+        private static void RetryPatchSpeech()
+        {
+            if (_speechPatched || _harmonyForSpeech == null) return;
+            _speechPatched = TryPatchSpeech(_harmonyForSpeech);
+        }
+
+        internal static Type FindType(string fullName)
+        {
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try { var t = asm.GetType(fullName, false); if (t != null) return t; } catch { }
+            }
+            return null;
         }
 
         private static void Write(string path, string text)
@@ -187,6 +232,8 @@ namespace MeiKongA11yProbe
             bool repeated = false;
             float RepeatAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_REPEAT_AT"), 0f);
             int miniStep = 0;
+            float KeysAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_KEYS_AT"), 0f);
+            bool keysDone = false;
             float DeskPetAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_DESKPET_AT"), 0f);
             float ExitAt = ParseFloat(Environment.GetEnvironmentVariable("MKPROBE_EXIT_AT"), 0f);
             string OpenPanel = Environment.GetEnvironmentVariable("MKPROBE_OPEN_PANEL") ?? "";
@@ -196,6 +243,7 @@ namespace MeiKongA11yProbe
             {
                 yield return new WaitForSecondsRealtime(n < 12 ? 5f : 20f);
                 n++;
+                try { RetryPatchSpeech(); } catch { }
                 try { Snapshot(n); } catch (Exception e) { Say("Snapshot 异常: " + e.Message); }
                 if (!_sceneTreeDumped && n >= 4) { try { DumpScenes("首次"); _sceneTreeDumped = true; } catch (Exception e) { Say("DumpScenes 异常: " + e.Message); } }
                 if (n == 6) { try { AuditPanels(); } catch (Exception e) { Say("AuditPanels 异常: " + e.Message); } }
@@ -219,6 +267,11 @@ namespace MeiKongA11yProbe
                 {
                     repeated = true;
                     try { CallA11yRepeat(); } catch (Exception e) { Say("重读失败: " + e.Message); }
+                }
+                if (!keysDone && KeysAt > 0f && (Time.realtimeSinceStartup - _startedAt) >= KeysAt)
+                {
+                    keysDone = true;
+                    try { StartCoroutine(KeyScenario.Run()); } catch (Exception e) { Say("按键场景启动失败: " + e.Message); }
                 }
                 if (!facesExported && FacesAt > 0f && (Time.realtimeSinceStartup - _startedAt) >= FacesAt)
                 {
@@ -797,6 +850,8 @@ namespace MeiKongA11yProbe
             }
         }
 
+        internal static void OpenPanelPublic(string objectName) { OpenPanelByName(objectName); }
+
         /// <summary>按对象名找到功能条按钮并点它（模拟玩家开面板）。</summary>
         private static void OpenPanelByName(string objectName)
         {
@@ -984,6 +1039,20 @@ namespace MeiKongA11yProbe
             ProbePlugin.Say(T + "NotifyScenarioEnded scenario=" + scenarioId);
         }
 
+        /// <summary>
+        /// StartScenario 的**入口裁决观测**：记录「谁触发的 + 最后有没有真的开起来」。
+        /// 补丁的 RunnerTest 前缀拦下时，Harmony 仍会跑这个后置补丁，__result 是 default(false) ——
+        /// 所以这一行就是「F1 测试键被拦住」的直接证据。
+        /// </summary>
+        [HarmonyPatch(typeof(DialogueV2Runner), "StartScenario",
+                      new[] { typeof(string), typeof(DialogueBoxMode), typeof(DialogueTriggerContext) })]
+        [HarmonyPostfix]
+        private static void StartScenario_Post(string scenarioId, DialogueTriggerContext trigger, ref bool __result)
+        {
+            ProbePlugin.Say(T + "StartScenario id=" + scenarioId
+                + " 触发器=" + trigger.Category + " 真的开起来了=" + __result);
+        }
+
         [HarmonyPatch(typeof(DialogueChoiceItemView), nameof(DialogueChoiceItemView.Bind))]
         [HarmonyPostfix]
         private static void Bind_Post(string text, Action onChosen)
@@ -1116,6 +1185,188 @@ namespace MeiKongA11yProbe
                 return string.Join(" <- ", parts);
             }
             catch { return "?"; }
+        }
+    }
+
+    // ======================================================================
+    // 注入按键：拦 UnityEngine.Input 自己造「这一帧按下了某键」
+    // 「游戏的 Update 里那句 Input.GetKeyDown 会不会走到我们的补丁」——
+    // 所以直接拦 Input 本身：全链路（游戏代码 + 补丁代码）看到的都是同一次按键，
+    // 与真人按键在**被观测的这一层**完全等价。
+    // ======================================================================
+    internal static class SimInput
+    {
+        private struct Shot { public KeyCode Key; public int Frame; }
+        private static readonly List<Shot> _q = new List<Shot>();
+        private static int _anyFrame = -1;
+
+        /// <summary>让「下一次 Update」里所有问这个键的代码都得到 true（真按键也是这样：一帧内人人可见）。</summary>
+        internal static void Press(KeyCode k, string label)
+        {
+            int f = Time.frameCount + 1;
+            _q.Add(new Shot { Key = k, Frame = f });
+            _anyFrame = f;
+            ProbePlugin.Say("[注入] 按下 " + label + "（第 " + f + " 帧）");
+        }
+
+        internal static bool Down(KeyCode k)
+        {
+            Prune();
+            for (int i = 0; i < _q.Count; i++) if (_q[i].Key == k && _q[i].Frame == Time.frameCount) return true;
+            return false;
+        }
+
+        internal static bool AnyDown() { Prune(); return _q.Count > 0 && _anyFrame == Time.frameCount; }
+
+        private static void Prune()
+        {
+            int now = Time.frameCount;
+            for (int i = _q.Count - 1; i >= 0; i--) if (_q[i].Frame < now) _q.RemoveAt(i);
+        }
+    }
+
+    internal static class ProbePatchesInput
+    {
+        [HarmonyPatch(typeof(UnityEngine.Input), "GetKeyDown", new[] { typeof(KeyCode) })]
+        [HarmonyPrefix]
+        private static bool GetKeyDown_Pre(KeyCode key, ref bool __result)
+        {
+            if (!SimInput.Down(key)) return true;
+            __result = true;
+            return false;
+        }
+
+        [HarmonyPatch(typeof(UnityEngine.Input), "get_anyKeyDown")]
+        [HarmonyPrefix]
+        private static bool AnyKeyDown_Pre(ref bool __result)
+        {
+            if (!SimInput.AnyDown()) return true;
+            __result = true;
+            return false;
+        }
+
+        /// <summary>观测 a11y 补丁的播报出口（挂不上就不挂）。</summary>
+        private static void Speech_Pre(string text, bool interrupt)
+        {
+            string tag = "?";
+            if (text != null)
+            {
+                if (text.StartsWith("再按一次")) tag = "小游戏关窗提示";
+                else if (text.StartsWith("已取消")) tag = "取消缓冲提示";
+                else if (text.StartsWith("正在关闭")) tag = "关窗执行提示";
+                else if (text.StartsWith("功能菜单")) tag = "F1 功能菜单";
+                else tag = "(其它)";
+            }
+            ProbePlugin.Say("[播报] interrupt=" + interrupt + " len=" + (text == null ? 0 : text.Length) + " 归属=" + tag);
+        }
+    }
+
+    internal static class KeyScenario
+    {
+        internal static IEnumerator Run()
+        {
+            ProbePlugin.Say("");
+            ProbePlugin.Say("################ 注入按键场景：F1 / ESC 两段缓冲 ################");
+            ProbePlugin.Say("起始: " + State());
+
+            // ---- 1) F1：游戏原生的开发者测试键 ----
+            ProbePlugin.Say("--- 1) 按 F1（游戏原生 Update 里会 StartScenario(Story_MorningGreeting)）---");
+            string before = DialoguePlaybackTracker.ScenarioId ?? "-";
+            ProbePlugin.Say("按 F1 前 scenario=" + before + " playing=" + DialoguePlaybackTracker.IsPlaying);
+            SimInput.Press(KeyCode.F1, "F1");
+            yield return new WaitForSecondsRealtime(4f);
+            ProbePlugin.Say("按 F1 后 scenario=" + (DialoguePlaybackTracker.ScenarioId ?? "-")
+                + " playing=" + DialoguePlaybackTracker.IsPlaying);
+            ProbePlugin.Say("  → 若 scenario 没变、日志里也没有 NotifyScenarioStarted scenario=Story_MorningGreeting，就是拦住了");
+
+            // ---- 2) 开小游戏面板 ----
+            ProbePlugin.Say("--- 2) 打开小游戏面板 ---");
+            ProbePlugin.OpenPanelPublic("小游戏");
+            yield return new WaitForSecondsRealtime(4f);
+            ProbePlugin.Say("开面板后: " + State());
+
+            // ---- 3) 第一次 ESC：只举起来 ----
+            ProbePlugin.Say("--- 3) 第一次 ESC（期望：只缓冲 + 提示，窗口不关）---");
+            SimInput.Press(KeyCode.Escape, "ESC #1");
+            yield return new WaitForSecondsRealtime(2.5f);
+            ProbePlugin.Say("ESC#1 之后: " + State());
+
+            // ---- 4) 其它键：取消缓冲 ----
+            ProbePlugin.Say("--- 4) 按 A（期望：缓冲撤销，窗口仍在）---");
+            SimInput.Press(KeyCode.A, "A");
+            yield return new WaitForSecondsRealtime(2.5f);
+            ProbePlugin.Say("按 A 之后: " + State());
+
+            // ---- 5) ESC 两连：真的关 ----
+            ProbePlugin.Say("--- 5) ESC 两连（期望：第二下关掉窗口）---");
+            SimInput.Press(KeyCode.Escape, "ESC #1");
+            yield return new WaitForSecondsRealtime(2f);
+            ProbePlugin.Say("ESC#1 之后: " + State());
+            SimInput.Press(KeyCode.Escape, "ESC #2");
+            yield return new WaitForSecondsRealtime(3.5f);
+            ProbePlugin.Say("ESC#2 之后: " + State());
+            ProbePlugin.Say("################ 注入按键场景结束 ################");
+        }
+
+        internal static string State()
+        {
+            var sb = new StringBuilder();
+            sb.Append("小游戏在玩=").Append(Bool("MeiKongA11y.Minigame", "IsActive", null));
+            sb.Append(" esc缓冲=").Append(Field("MeiKongA11y.Minigame", "_escArmed"));
+            sb.Append(" 面板=[").Append(Str("MeiKongA11y.Surfaces", "CurrentPanelId")).Append("]");
+            string cur = Prop("MeiKongA11y.Repeat", "Current");
+            sb.Append(" 重读缓冲区len=").Append(cur == null ? 0 : cur.Length);
+            sb.Append(" 是我方提示=").Append(cur != null &&
+                (cur.StartsWith("再按一次") || cur.StartsWith("已取消") || cur.StartsWith("正在关闭")));
+            sb.Append(" | scenario=").Append(DialoguePlaybackTracker.ScenarioId ?? "-");
+            return sb.ToString();
+        }
+
+        private static readonly BindingFlags F = BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public;
+
+        private static string Bool(string type, string method, object[] args)
+        {
+            try
+            {
+                var t = ProbePlugin.FindType(type);
+                var m = t?.GetMethod(method, F);
+                if (m == null) return "?";
+                return Convert.ToString(m.Invoke(null, args));
+            }
+            catch { return "!"; }
+        }
+
+        private static string Field(string type, string name)
+        {
+            try
+            {
+                var t = ProbePlugin.FindType(type);
+                var f = t?.GetField(name, F);
+                return f == null ? "?" : Convert.ToString(f.GetValue(null));
+            }
+            catch { return "!"; }
+        }
+
+        private static string Prop(string type, string name)
+        {
+            try
+            {
+                var t = ProbePlugin.FindType(type);
+                var pr = t?.GetProperty(name, F);
+                return pr == null ? null : Convert.ToString(pr.GetValue(null, null));
+            }
+            catch { return null; }
+        }
+
+        private static string Str(string type, string method)
+        {
+            try
+            {
+                var t = ProbePlugin.FindType(type);
+                var m = t?.GetMethod(method, F);
+                return m == null ? "?" : Convert.ToString(m.Invoke(null, null));
+            }
+            catch { return "!"; }
         }
     }
 }

@@ -199,6 +199,11 @@ namespace MeiKongA11y
 
         private static void HandleKeys()
         {
+            // 返回键先问 —— 它一旦吃下这一帧的输入，后面的方向键/回车就不该再当回事。
+            // （本作运行时没有 UIManager 实例，游戏自己不看 ESC，所以这里是唯一的裁决点；
+            //   万一将来有了，UIManager 的前置钩子会先问，帧内去重保证只处理一次。）
+            InterceptBackInput();
+
             int dx = 0, dy = 0;
             if (Input.GetKeyDown(KeyCode.LeftArrow)) dx = -1;
             else if (Input.GetKeyDown(KeyCode.RightArrow)) dx = 1;
@@ -240,6 +245,113 @@ namespace MeiKongA11y
                 A11yHost.Diag("[小游戏] OnCardClicked(" + idx + ")");
             }
             catch (Exception e) { A11yHost.Diag("[小游戏] FlipCurrent 异常: " + e.Message); }
+        }
+
+// ==================================================================
+        // 4) 返回键：按 ESC 关闭小游戏窗口（两段缓冲，防误触）
+        //
+        // 为什么这件事得我们自己干：小游戏面板由**桌宠面板系统**
+        // （PetUiIntegrationHub → PetPanelRegistry）开关，**不在** UIManager 的返回栈上；
+        // 而探针实查运行时场景里连 UIManager 实例都没有 —— 游戏自己对 ESC 毫无反应。
+        // 正常人是用鼠标点窗口的关闭按钮，那按钮走的正是 hub.CloseMinigame()，我们叫同一个。
+        //
+        // 为什么要按两次：小游戏一开局就作废、没有存档点，误触一次就是白玩一局。
+        // 所以第一次按只「举起来」并说清楚，再按一次才真关，中途按别的键就撤。
+        // 这与 UiNav「退出前二次确认」是同一套交互模型（0.1.0.0 起就在用），
+        // 读屏用户不必再学一套新的。
+        // ==================================================================
+
+        private static bool _escArmed;
+
+        // 帧内去重：Plugin 的输入分发与 UIManager 的前置钩子都会问同一件事，
+        // 但**帧序不可假设**，所以谁先问谁干活，第二个拿结论就好 —— 不能念两遍、更不能关两次。
+        private static int _askedFrame = -1;
+        private static bool _askedVerdict;
+
+        /// <summary>
+        /// 裁决「这一帧的返回输入要不要交给游戏」。返回 true = 我们吃下了，游戏不要再看。
+        /// 小游戏窗口没开时永远返回 false（不动游戏一丝一毫）。
+        /// </summary>
+        internal static bool InterceptBackInput()
+        {
+            if (_askedFrame == Time.frameCount) return _askedVerdict;
+            _askedFrame = Time.frameCount;
+            bool consumed = false;
+            try
+            {
+                if (IsActive()) consumed = HandleBackInput();
+                else _escArmed = false;          // 窗口已经关了，缓冲自然作废
+            }
+            catch (Exception e) { A11yHost.Diag("[小游戏] 返回键异常: " + e.Message); }
+            _askedVerdict = consumed;
+            return consumed;
+        }
+
+        private static bool HandleBackInput()
+        {
+            if (Plugin.KeyDown(Plugin.CfgClosePanelKey))
+            {
+                bool confirm = Plugin.CfgClosePanelConfirm == null || Plugin.CfgClosePanelConfirm.Value;
+                if (!confirm)
+                {
+                    Repeat.Say("正在关闭小游戏窗口。", true);
+                    CloseWindow();
+                    return true;
+                }
+                if (!_escArmed)
+                {
+                    _escArmed = true;
+                    Repeat.Say("再按一次" + CloseKeyName() + "关闭小游戏窗口，按下其它任意键取消缓冲。", true);
+                    return true;
+                }
+                _escArmed = false;
+                Repeat.Say("正在关闭小游戏窗口。", true);
+                CloseWindow();
+                return true;
+            }
+
+            // 「其它任意键」用 Input.anyKeyDown：它**包含鼠标左右中键**，
+            // 所以缓冲举着的时候右键点一下也当取消 —— 不会绕过确认把关掉窗口，
+            // 也不会出现「按了键但没反应」的沉默状态。
+            if (_escArmed && Input.anyKeyDown)
+            {
+                _escArmed = false;
+                Repeat.Say("已取消缓冲。", false);
+                return true;
+            }
+            return false;
+        }
+
+        private static string CloseKeyName()
+        {
+            string s = Plugin.CfgClosePanelKey != null ? Plugin.CfgClosePanelKey.Value : "Escape";
+            if (string.IsNullOrEmpty(s)) return "ESC";
+            s = s.Trim();
+            if (s.Equals("Escape", StringComparison.OrdinalIgnoreCase)
+                || s.Equals("Esc", StringComparison.OrdinalIgnoreCase)) return "ESC";
+            return s;
+        }
+
+        /// <summary>
+        /// 关窗：叫游戏自己的 <c>PetUiIntegrationHub.CloseMinigame()</c> ——
+        /// 也就是窗口关闭按钮上挂的那个方法（它顺带做 StopAndReset，和鼠标点关闭完全等价）。
+        /// 拿不到 Hub 才退化为直接关面板。
+        /// </summary>
+        private static void CloseWindow()
+        {
+            try
+            {
+                var hub = UnityEngine.Object.FindObjectOfType<PetUiIntegrationHub>(true);
+                if (hub != null)
+                {
+                    hub.CloseMinigame();
+                    A11yHost.Diag("[小游戏] 已调用 PetUiIntegrationHub.CloseMinigame()");
+                    return;
+                }
+                A11yHost.Diag("[小游戏] 找不到 PetUiIntegrationHub，退化为直接关面板");
+            }
+            catch (Exception e) { A11yHost.Diag("[小游戏] CloseMinigame 异常: " + e.Message); }
+            Surfaces.ClosePanel("minigame");
         }
 
         // ==================================================================
@@ -381,6 +493,7 @@ namespace MeiKongA11y
         internal static void Reset()
         {
             _announcedStart = false;
+            _escArmed = false;
             _cards.Clear();
             for (int i = 0; i < _prevValid.Length; i++) _prevValid[i] = false;
             _lastPlayerScore = _lastCpuScore = -1;
