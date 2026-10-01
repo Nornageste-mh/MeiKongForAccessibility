@@ -243,7 +243,7 @@ cd mod
 │  │  ├─ Announcer.cs           播报调度（别和配音抢话）
 │  │  ├─ TextProc.cs            文本清洗（本作近乎空实现）
 │  │  └─ Patches.cs             Harmony 补丁点
-│  └─ package/                  组装出来的安装包（不入库）
+│  └─ package/                  组装出来的安装包（二进制不入库，两份手写文档入库）
 ├─ probe/                       实机探针（P1 证据来源，不入库产物）
 ├─ docs/                        设计依据
 └─ tools/                       提交前守卫
