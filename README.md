@@ -2,7 +2,7 @@
 
 本仓库是**专门针对 Steam 游戏《妹控计划》（MeiKongProject，AppID 4169160）** 的屏幕阅读器
 辅助补丁 —— 一个游戏内 BepInEx 5 插件，通过 Tolk / NVDA Controller Client /
-Windows SAPI 朗读屏幕上的文字。
+争渡读屏（ZDSR）/ Windows SAPI 朗读屏幕上的文字。
 
 > ## 🎮 关于本作
 >
@@ -158,6 +158,7 @@ Windows SAPI 朗读屏幕上的文字。
 | `F3` | 戳一下诗萌（等价于鼠标左键点她本人） |
 | `F4` | 和诗萌聊聊（按下当前可见的「和诗萌聊聊」按钮） |
 | `F5` | **切回全屏（保命键）** —— 见上面「桌宠模式」那一段 |
+| `F9` | **切换语音后端** —— 按一下切到下一个**当前可用**的后端（循环顺序 `自动 → Tolk → NVDA → 争渡 → SAPI`），当前不可用的会被跳过并在播报里说明；选择写进配置文件，下次启动仍生效。把配置项留空即停用 |
 | `Esc` | 在小游戏窗口里**按两次**关掉它（第一次只是举起来并提示，按其它任意键取消） |
 | `1` - `9` | 选择对应编号的选项 |
 | `Backspace` | 重读最近那一句；**有选项时重读选项** |
@@ -170,6 +171,14 @@ Windows SAPI 朗读屏幕上的文字。
 
 **游戏原生占用的键**：空格 / 回车 / 小键盘回车 / 鼠标滚轮 = 推进剧情，
 按住 `Ctrl` = 快进，`R` = 历史记录。
+
+> **`F9` 与中文 Windows 的输入法**：`Alt+Shift` 是 Windows 默认的**输入法 / 输入语言切换键**，
+> 所以「和游戏抢键」时最顺手的 `Alt+Shift+F9` 用起来也可能别扭。
+> 这一项接受任何「修饰键+主键」写法（`F9`、`Alt+Shift+F9`、`Ctrl+Alt+F9`…），
+> 但**修饰键必须完全对上** —— 配置写 `F9` 时，按住 Alt 再按 F9 **不会**触发
+> （这是刻意的：免得抢走游戏自己的 `Alt+F9`）。
+> 纯数字键名会被拒绝（`Enum.TryParse("0")` 会「成功」并给出 `KeyCode.None`，
+> 那是个永远不触发、也不报错的键），要数字键请写 `Alpha0`。
 
 > **一处订正**：这里原来写「`Esc` / 鼠标右键 = 呼出或收起界面」，**那是错的**。
 > 那是从反编译里读来的，但本作运行时场景里 `UIManager`、`CGPanelManager`、
@@ -201,7 +210,9 @@ Windows SAPI 朗读屏幕上的文字。
 - 存档槽与读档列表把章节标题**截断到 20 字**，全文只在鼠标悬停时才写进 TMP
 - **未覆盖所有界面与交互**，下列内容还没逐项打磨：系统设置、
   日程表、番茄钟的计时播报、故事与收藏 / 音乐 / 饭点 / 表情包工坊的面板级细节
-- 语音朗读依赖所选后端（Tolk / NVDA / SAPI），中文需要中文语音（系统语音里要有中文嗓音）
+- 语音朗读依赖所选后端（Tolk / NVDA / 争渡读屏 / SAPI），中文需要中文语音（系统语音里要有中文嗓音）。
+  争渡这一级要求本机装有争渡读屏，且是**商业版 / 青春版**（公益档没有 API 权限，
+  `GetSpeakState()` 恒为 2，会被**如实判为不可用**）；它**不需要**你往游戏目录放任何文件
 - **主线 50 章只跑过开头几章**，联动内容与按日期/进度触发的台词都没有实机确认过
 
 ---
@@ -229,8 +240,10 @@ cd mod
 │  ├─ build.ps1                 下依赖 → 编译 → 组包
 │  ├─ src/MeiKongA11y/
 │  │  ├─ Plugin.cs              BepInEx 入口 + 配置 + 每帧输入分发
-│  │  ├─ Speech.cs              Tolk / NVDA / SAPI 后端调度
+│  │  ├─ Speech.cs              Tolk / NVDA / 争渡 / SAPI 后端调度
 │  │  ├─ Nvda.cs                NVDA Controller Client 封装
+│  │  ├─ Zdsr.cs                争渡读屏（ZDSR）ZDSRAPI 封装（从争渡安装目录加载）
+│  │  ├─ Hotkey.cs              「修饰键+主键」解析与边沿检测（切换后端键用）
 │  │  ├─ Sapi.cs                Windows 内置语音（纯 P/Invoke 直调 ISpVoice）
 │  │  ├─ UiNav.cs               界面导航引擎（来自 A11yFramework 的平台层）
 │  │  ├─ UiNav.Game.cs          平台层的**逐作区**：标签解析 / 组名 / 组序
@@ -249,7 +262,7 @@ cd mod
 └─ tools/                       提交前守卫
 ```
 
-平台层（`Speech` / `Nvda` / `Sapi` / `UiNav` / `KeyEdge` / `A11yHost`）来自
+平台层（`Speech` / `Nvda` / `Zdsr` / `Hotkey` / `Sapi` / `UiNav` / `KeyEdge` / `A11yHost`）来自
 [A11yFramework](https://github.com/Nornageste-mh/Framework)，**整份拷贝、不逐作改写**。
 逐作只动 `UiNav.Game.cs` 与其余几个文件。
 
@@ -349,6 +362,8 @@ ilspycmd -p -o decomp "<游戏目录>\MeiKongProject_Data\Managed\Assembly-CShar
   逆向固化出来的。
 - 语音后端：[Tolk](https://github.com/ndarilek/tolk)（BSD）、
   [NVDA Controller Client](https://www.nvaccess.org/)（LGPL-2.1，NV Access）、
+  **争渡读屏（ZDSR）** —— 运行时调用玩家本机安装的 `ZDSRAPI*.dll`
+  （按官方建议**从争渡安装目录加载**，本仓库**不随包分发**该 DLL）、
   Windows SAPI。
 - 挂载框架：[BepInEx](https://github.com/BepInEx/BepInEx)（LGPL-2.1）、
   [HarmonyX](https://github.com/BepInEx/HarmonyX)（MIT）、

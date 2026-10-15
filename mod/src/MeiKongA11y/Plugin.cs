@@ -27,7 +27,7 @@ namespace MeiKongA11y
     ///   · 只有一个场景、旧对话系统是不可达死代码 → 只挂 ShiMeng.DialogueV2 一套。
     ///   · 交互是主战场 → 面板感知 + 功能菜单 + 状态播报（Surfaces.cs）。
     /// </summary>
-    [BepInPlugin(Guid, "妹控计划 A11y Reader", "0.1.0.3")]
+    [BepInPlugin(Guid, "妹控计划 A11y Reader", "0.1.0.4")]
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "meikong.a11y.reader";
@@ -40,6 +40,9 @@ namespace MeiKongA11y
         internal static ConfigEntry<bool>   CfgReadChoices;
         internal static ConfigEntry<bool>   CfgChoiceHotkeys;
         internal static ConfigEntry<string> CfgRepeatKey;
+
+        /// <summary>运行中切换语音后端的按键（支持 Alt+Shift+F9 这类写法）。</summary>
+        internal static ConfigEntry<string> CfgBackendKey;
         internal static ConfigEntry<string> CfgSpeechBackend;
 
         // ---- 界面导航 ----
@@ -91,12 +94,18 @@ namespace MeiKongA11y
                 "用数字键 1-9 选择对应编号的选项。等价于用鼠标点那一个按钮 —— 不预选、不跳过。\n" +
                 "选项还没全部出现完时按数字键无效（那是游戏自己的节奏）。");
 
+            CfgBackendKey = Config.Bind("朗读", "切换语音后端按键", "F9",
+                "运行中切换语音后端的按键。可写修饰键组合，例如 F9、Alt+Shift+F9、Ctrl+Alt+F9。\n" +
+                "按一下切到下一个「当前可用」的后端（自动 → Tolk → NVDA → 争渡 → SAPI → 自动），\n" +
+                "当前不可用的会被跳过并在播报里说明；选择会写进本配置文件，下次启动仍生效。\n" +
+                "留空则关闭这个功能键。");
+
             CfgRepeatKey = Config.Bind("朗读", "重读按键", "Backspace",
                 "重新朗读最近一次收到的台词。对**有配音的行**来说，这是唯一的朗读通路。\n" +
                 "填 KeyCode 名称。不要填游戏原生占用的键（见 README「游戏原生占用的键」）。");
 
             CfgSpeechBackend = Config.Bind("朗读", "语音后端", "自动",
-                "自动 / Tolk / NVDA / SAPI。默认按 Tolk → NVDA → SAPI 挑第一个可用的；\n" +
+                "自动 / Tolk / NVDA / 争渡 / SAPI。默认按 Tolk → NVDA → 争渡 → SAPI 挑第一个可用的；\n" +
                 "钉死某个后端且它不可用时**不会回退**（这是刻意的，用于排查）。");
 
             CfgMenuNav = Config.Bind("界面导航", "菜单键盘导航", true,
@@ -270,6 +279,10 @@ namespace MeiKongA11y
                 if (KeyDown(CfgMenuKey)) Surfaces.OpenMenu();
                 if (KeyDown(CfgStateKey)) Surfaces.ReportState();
                 if (KeyDown(CfgRepeatKey)) Reader.RepeatLast();
+
+                // 运行中切换语音后端（默认 F9。游戏若占用 F9，把配置改成 Alt+Shift+F9）
+                if (Hotkey.Down(CfgBackendKey != null ? CfgBackendKey.Value : ""))
+                    Repeat.Say(Speech.CycleAvailable(), true);
                 if (KeyDown(CfgPokeKey)) Pet.Poke();
                 if (KeyDown(CfgStoryBtnKey)) Pet.ClickStoryButton();
 
