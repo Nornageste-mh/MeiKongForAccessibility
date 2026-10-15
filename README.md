@@ -212,7 +212,12 @@
   日程表、番茄钟的计时播报、故事与收藏 / 音乐 / 饭点 / 表情包工坊的面板级细节
 - 语音朗读依赖所选后端（Tolk / NVDA / 争渡读屏 / SAPI），中文需要中文语音（系统语音里要有中文嗓音）。
   争渡这一级要求本机装有争渡读屏，且是**商业版 / 青春版**（公益档没有 API 权限，
-  `GetSpeakState()` 恒为 2，会被**如实判为不可用**）；它**不需要**你往游戏目录放任何文件
+  `GetSpeakState()` 恒为 2，会被**如实判为不可用**）；它**不需要**你往游戏目录放任何文件 ——
+  补丁会读注册表自动找到争渡的安装目录（装在别的盘也算数），
+  发布包里另外带了一份**可删的兜底** `ZDSRAPI_x64.dll` / `ZDSRAPI.dll`
+- **本作没有用当前这一版跑过**：自动查找安装目录、以及「包内那份过期就换下一份」
+  这两条新路径，只在平台层自检（71 条断言 0 失败）、平台层编译检查（0 错误 0 警告）
+  与构建里验证过，**没有在游戏里走过**
 - **主线 50 章只跑过开头几章**，联动内容与按日期/进度触发的台词都没有实机确认过
 
 ---
@@ -242,7 +247,7 @@ cd mod
 │  │  ├─ Plugin.cs              BepInEx 入口 + 配置 + 每帧输入分发
 │  │  ├─ Speech.cs              Tolk / NVDA / 争渡 / SAPI 后端调度
 │  │  ├─ Nvda.cs                NVDA Controller Client 封装
-│  │  ├─ Zdsr.cs                争渡读屏（ZDSR）ZDSRAPI 封装（从争渡安装目录加载）
+│  │  ├─ Zdsr.cs                争渡读屏（ZDSR）ZDSRAPI 封装（注册表找安装目录 + 运行时加载）
 │  │  ├─ Hotkey.cs              「修饰键+主键」解析与边沿检测（切换后端键用）
 │  │  ├─ Sapi.cs                Windows 内置语音（纯 P/Invoke 直调 ISpVoice）
 │  │  ├─ UiNav.cs               界面导航引擎（来自 A11yFramework 的平台层）
@@ -362,8 +367,12 @@ ilspycmd -p -o decomp "<游戏目录>\MeiKongProject_Data\Managed\Assembly-CShar
   逆向固化出来的。
 - 语音后端：[Tolk](https://github.com/ndarilek/tolk)（BSD）、
   [NVDA Controller Client](https://www.nvaccess.org/)（LGPL-2.1，NV Access）、
-  **争渡读屏（ZDSR）** —— 运行时调用玩家本机安装的 `ZDSRAPI*.dll`
-  （按官方建议**从争渡安装目录加载**，本仓库**不随包分发**该 DLL）、
+  **争渡读屏（ZDSR）** —— 运行时按「注册表登记的安装目录 → 默认安装目录 →
+  插件目录（包内兜底）→ 游戏目录」的顺序找 `ZDSRAPI*.dll`，
+  优先用玩家本机安装目录里那份（官方建议）；发布包在 `BepInEx\plugins\` 里
+  另外带了一份**可删的兜底**（32 / 64 位各一，取自打包机上的真实争渡安装目录，
+  未经修改、随这个免费非商业补丁再分发，署名与依据见包内
+  `licenses\THIRD-PARTY-NOTICES.txt`）、
   Windows SAPI。
 - 挂载框架：[BepInEx](https://github.com/BepInEx/BepInEx)（LGPL-2.1）、
   [HarmonyX](https://github.com/BepInEx/HarmonyX)（MIT）、
