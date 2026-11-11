@@ -1,0 +1,18 @@
+# 平台层（L1）文件清单 —— **唯一真源**。
+# 每行一个文件名，顺序即 new_game.py 的拷贝顺序；以 # 开头的行是注释。
+# 机械保证（三处都读这一份，漂移会直接报错）：
+#   · new_game.py        逐行拷贝 platform\<文件名>，并原样写进逐作仓 tools\l1-files.txt；
+#                        同时校验 platform\ 下的 *.cs 与本清单完全一致，多/少都拒绝生成。
+#   · compile_check.ps1  模式 A 断言 platform\*.cs 与本清单一致；模式 B 断言逐作仓
+#                        mod\src\<ns>\ 包含本清单的每个文件。
+#   · assemble_from_sources.py 重建 platform\ 时应保持同一集合。
+# 平台层增删/改名 .cs 后，必须同步改本文件，否则生成与自检都会失败。
+Speech.cs
+Nvda.cs
+Sapi.cs
+Zdsr.cs
+GlobalKeys.cs
+Hotkey.cs
+KeyEdge.cs
+UiNav.cs
+Repeat.cs

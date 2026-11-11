@@ -3,8 +3,9 @@
     可复现构建：下载依赖 → 编译插件 → 组装安装包
 
     用法：
-        cd D:\DSHWorkBase\belfry_a11y\mod
-        .\build.ps1
+        cd <本仓库>\mod
+        .\build.ps1                                  # 自动从 Steam 库目录找游戏
+        .\build.ps1 -GameDir 'D:\Games\妹控计划'      # 或显式指定
 
     产物：
         .\package\    ← 直接拷进游戏根目录即可用
@@ -22,12 +23,13 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = "F:\Steam\steamapps\common\妹控计划",
+    # 游戏根目录（含 MeiKongProject.exe）。留空则自动从 Steam 库目录里找。
+    [string]$GameDir = "",
     # 依赖版本（如需升级改这里）
     [string]$BepInExVersion = "5.4.23.5",
     [string]$NvdaClientUrl  = "https://download.nvaccess.org/releases/stable/nvda_2026.2_controllerClient.zip",
-    # 复用本机已有的下载缓存（上一个仓库留下的），没有就自己下
-    [string]$CacheDir = "D:\DSHWorkBase\transparenther_a11y\mod"
+    # 复用本机已有的下载缓存（可选，留空就自己下）
+    [string]$CacheDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,9 +42,30 @@ function Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
 
 # ------------------------------------------------------------
 Step "1/5  检查游戏目录"
-if (-not (Test-Path -LiteralPath (Join-Path $GameDir "MeiKongProject.exe"))) {
+# 没传 -GameDir 时从 Steam 库目录（registry SteamPath + libraryfolders.vdf）里找。
+# 一台机器上只装一次的东西不该写死在脚本里，也不该要求每个构建者都知道路径。
+function Find-GameDir {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    $steam = $null
+    try { $steam = (Get-ItemProperty -LiteralPath "HKCU:\Software\Valve\Steam" -ErrorAction Stop).SteamPath } catch { }
+    if ($steam) {
+        $candidates.Add((Join-Path $steam "steamapps\common\妹控计划"))
+        $vdf = Join-Path $steam "steamapps\libraryfolders.vdf"
+        if (Test-Path -LiteralPath $vdf) {
+            foreach ($m in [regex]::Matches((Get-Content -LiteralPath $vdf -Raw), '"path"\s+"([^"]+)"')) {
+                $candidates.Add((Join-Path ($m.Groups[1].Value -replace '\\\\','\') "steamapps\common\妹控计划"))
+            }
+        }
+    }
+    foreach ($c in $candidates) {
+        if (Test-Path -LiteralPath (Join-Path $c "MeiKongProject.exe")) { return $c }
+    }
+    return $null
+}
+if (-not $GameDir) { $GameDir = Find-GameDir }
+if (-not $GameDir -or -not (Test-Path -LiteralPath (Join-Path $GameDir "MeiKongProject.exe"))) {
     Write-Host "    找不到游戏：$GameDir" -ForegroundColor Red
-    Write-Host "    用 -GameDir 参数指定游戏根目录。"
+    Write-Host "    用 -GameDir 参数指定游戏根目录（含 MeiKongProject.exe 的那一层）。"
     exit 1
 }
 Ok $GameDir
@@ -55,8 +78,8 @@ if (Test-Path -LiteralPath (Join-Path $bepDir "BepInEx\core\BepInEx.dll")) {
     Ok "已存在，跳过下载"
 } else {
     if (-not (Test-Path -LiteralPath $bepZip)) {
-        $cacheZip = Join-Path $CacheDir "dl\BepInEx_win_x64_$BepInExVersion.zip"
-        if (Test-Path -LiteralPath $cacheZip) {
+        $cacheZip = if ($CacheDir) { Join-Path $CacheDir "dl\BepInEx_win_x64_$BepInExVersion.zip" } else { "" }
+        if ($cacheZip -and (Test-Path -LiteralPath $cacheZip)) {
             Copy-Item $cacheZip $bepZip -Force
             Ok "复用缓存 $cacheZip"
         } else {
@@ -81,8 +104,8 @@ if (Test-Path -LiteralPath $nvdaDir) {
 if ($nvdaDll) {
     Ok "已存在，跳过下载"
 } else {
-    $cacheNvda = Join-Path $CacheDir "nvda_dl"
-    if (Test-Path -LiteralPath $cacheNvda) {
+    $cacheNvda = if ($CacheDir) { Join-Path $CacheDir "nvda_dl" } else { "" }
+    if ($cacheNvda -and (Test-Path -LiteralPath $cacheNvda)) {
         New-Item -ItemType Directory -Force -Path $nvdaDir | Out-Null
         Copy-Item (Join-Path $cacheNvda "*") $nvdaDir -Recurse -Force
         Ok "复用缓存 $cacheNvda"

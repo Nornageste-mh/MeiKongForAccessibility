@@ -30,6 +30,19 @@ namespace MeiKongA11y
         internal static bool LastHadVoice;
         internal static bool LastWasSpoken;
 
+        /// <summary>
+        /// 剧情是不是正在进行（0.2.1 起给 Focus 用）。
+        ///
+        /// 主界面的图标浏览只在「没有面板、没有剧情、没有小游戏」时才有意义：
+        /// 剧情一开始必须立刻退出浏览，否则方向键/回车会被补丁抢走，
+        /// 玩家按空格推进剧情时可能先激活主界面的某个图标（这正是「不符合盲人逻辑」的一类）。
+        /// </summary>
+        internal static bool InDialogue;
+
+        // 真正的剧情（story_* / tool_* 等）。桌宠的 idle 台词（basic_待机_* / basic_启动_* 等）也会走
+        // NotifyScenarioStarted，但它们不是「玩家在过剧情」，不能因此把主界面浏览踢掉。
+        internal static bool InStory;
+
         // ==================================================================
         // 重读缓冲区
         //
@@ -54,13 +67,21 @@ namespace MeiKongA11y
 
         private const string ChoicesTag = "meikong.choices";
 
-        /// <summary>选项出现时把整段选项文本设为重读优先项（由 Choices.Ready 调用）。</summary>
-        internal static void SetChoices(string text) { Repeat.Push(text, ChoicesTag); }
+        /// <summary>
+        /// 选项出现时把整段选项文本设为重读优先项（由 Choices.Ready 调用）。
+        ///
+        /// 0.2.7.2 起用 <c>Repeat.Note</c> 而不是 <c>Push</c>：平台层的 Push 已经变成
+        /// 「入缓冲区 **并且自己播报**」（G33，`platform/Repeat.cs` 注释写明是冻结语义），
+        /// 而本作的播报点在 Choices.Ready 里紧接着调 <c>Announcer.Auto</c>
+        /// —— 再 Push 就会把同一串选项念两遍。Note 只入缓冲区，播报仍由调用方负责。
+        /// </summary>
+        internal static void SetChoices(string text) { Repeat.Note(text); }
 
         /// <summary>选项没了（选完了 / 段落结束）—— 缓冲区退回台词。</summary>
         internal static void ClearChoices() { Repeat.Drop(ChoicesTag); }
 
-        internal static bool HasChoicesBuffered { get { return Repeat.HasPriority; } }
+        /// <summary>缓冲区里有没有东西（日志/诊断用；选项不再单独占优先级）。</summary>
+        internal static bool HasChoicesBuffered { get { return Repeat.Current != null; } }
 
         private static float _lastAt = -100f;
         private static string _lastKey = "";
@@ -120,9 +141,9 @@ namespace MeiKongA11y
         /// </summary>
         internal static void RepeatLast()
         {
-            // 缓冲区本体在 L1：选项还挂着就念选项、否则念台词，空的时候如实说明。
-            A11yHost.Diag("[重读] " + (Repeat.HasPriority ? "选项" : "台词")
-                          + " 长度=" + (Repeat.Current != null ? Repeat.Current.Length : 0));
+            // 缓冲区本体在 L1：0.2.7.2 起选项用 Note 入缓冲（不再占优先级队列），
+            // 所以重读念的就是「最近进入缓冲区的那一串」—— 选项出现时它就是选项，选完之后是台词。
+            A11yHost.Diag("[重读] 长度=" + (Repeat.Current != null ? Repeat.Current.Length : 0));
             Repeat.Again();
         }
 
@@ -133,9 +154,23 @@ namespace MeiKongA11y
             LastIndex = -1;
             _lastKey = "";
             LastText = "";
+            InDialogue = true;
+            // 桌宠的 idle 台词（basic_待机_* / basic_启动_* / basic_点击_* 等）也会走这条事件，
+            // 但它们不是「玩家正在过剧情」。只有非 basic_ 的场景（story_* / tool_* 等）
+            // 才允许把主界面图标浏览踢掉，否则玩家一按方向键就会被待机台词打断。
+            InStory = !LastScenario.StartsWith("basic_", System.StringComparison.OrdinalIgnoreCase);
+            A11yHost.Diag("[剧情] 开始 " + LastScenario + " → InDialogue=true, InStory=" + InStory);
             // 只清选项优先项；**不清主缓冲区** ——
             // 「重读最近听到的内容」跨段落仍然成立，清掉反而让刚进新章时按重读键没反应。
             ClearChoices();
+        }
+
+        /// <summary>一段剧情结束：主界面图标浏览可以重新开始。</summary>
+        internal static void OnScenarioEnded(string scenarioId)
+        {
+            A11yHost.Diag("[剧情] 结束 " + (scenarioId ?? "") + " → InDialogue=false");
+            InDialogue = false;
+            InStory = false;
         }
     }
 }

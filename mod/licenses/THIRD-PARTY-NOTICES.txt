@@ -1,4 +1,4 @@
-MeiKongA11y 第三方组件与许可证
+﻿MeiKongA11y 第三方组件与许可证
 ================================
 （随安装包分发 · 2026-10-01）
 
@@ -18,7 +18,7 @@ MeiKongA11y 第三方组件与许可证
    随包文件：BepInEx\core\BepInEx.dll、BepInEx.Preloader.dll
    许可证  ：MIT — Copyright (c) 2018 Bepis
    上游    ：https://github.com/BepInEx/BepInEx
-   全文    ：MIT-BepInEx.txt
+   全文    ：MIT-BepInEx.txt（另附 LGPL-2.1-BepInEx.txt，覆盖 BepInEx 5 上游的 LGPL-2.1 条款）
 
 2) BepInEx.Harmony（BepInEx 5.4.23.5 内置子模块）
    随包文件：BepInEx\core\BepInEx.Harmony.dll、HarmonyXInterop.dll、0Harmony20.dll
@@ -65,7 +65,7 @@ MeiKongA11y 第三方组件与许可证
    许可证  ：GNU LGPL 2.1（仅 2.1 版）
    上游    ：NV Access — https://github.com/nvaccess/nvda
              （目录 extras/controllerClient 与 nvdaHelper/client）
-   全文    ：LGPL-2.1.txt
+   全文    ：LGPL-2.1.txt（另附带 NV Access 版权行的副本 LGPL-2.1-NVDA-ControllerClient.txt）
 
 8) 争渡读屏（ZDSR）的 ZDSRAPI（**不属于本补丁的 MIT 许可范围**）
    随包文件：BepInEx\plugins\ZDSRAPI_x64.dll（64 位）

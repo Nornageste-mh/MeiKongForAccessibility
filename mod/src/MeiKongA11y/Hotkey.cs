@@ -30,6 +30,12 @@ namespace MeiKongA11y
     ///     LeftAlt+F9          LeftAlt / RightAlt / LeftCtrl / RightCtrl / LeftShift / RightShift
     ///                         都按「任意一侧」处理（同一功能键区分左右没有意义，
     ///                         而且区分了反而更容易配错）
+    ///     Ctrl+Alt+Plus       主键盘加号（= Shift+Equals）。0.2.3 新增，也认中文「加号」；
+    ///                         小键盘加号（KeypadPlus）**不算**，要它请显式写 KeypadPlus。
+    ///     Ctrl+Alt+=          主键盘等号。0.2.5 新增（来源《魔法少女ノ魔女裁判》0.0.0.11：
+    ///                         重读键从 Backspace 挪到 `=`，避开游戏自带键）；也认全角 `＝`
+    ///                         与显式 `Equals`。`Enum.TryParse("=")` 不认这个符号，
+    ///                         必须在这里映射到 KeyCode.Equals，否则会得到「Unity 不认识这个键名」。
     ///     (空)                已停用，永远不触发
     ///
     /// 两条刻意定下的语义：
@@ -50,6 +56,19 @@ namespace MeiKongA11y
             public bool Shift;
         }
 
+        // ====================================================================
+        // 全局按键（0.2.3）：由契约层按开关注入，本文件保持「只依赖 UnityEngine」
+        // ====================================================================
+        //
+        // 为什么不直接引用 GlobalKeys.cs：本文件必须能**单文件**编译 ——
+        // tools/zdsr_selftest 只 Include Zdsr.cs + Hotkey.cs（UnityEngine 用桩），
+        // 流水线 §5 的机械自检靠这一点。所以这里只收两个委托：
+        //   GlobalHeld    ：某个键现在是否按住
+        //   GlobalPressed ：某个键这一帧是否是「按下沿」
+        // 两者都为 null 时（独立编译 / 老作 / 未开开关）行为与 0.2.2 逐字节一致。
+        internal static Func<KeyCode, bool> GlobalHeld;
+        internal static Func<KeyCode, bool> GlobalPressed;
+
         /// <summary>
         /// 解析按键描述。返回 false 时 <paramref name="why"/> 是人话原因
         /// （空配置=已停用，也返回 false，但原因写「留空」）。
@@ -65,6 +84,7 @@ namespace MeiKongA11y
             if (parts.Length == 0) { why = "认不出来：" + spec; return false; }
 
             bool alt = false, ctrl = false, shift = false;
+            bool plusToken = false;
             string keyName = null;
             foreach (string raw in parts)
             {
@@ -76,11 +96,34 @@ namespace MeiKongA11y
                 if (u == "CTRL" || u == "CONTROL" || u == "LEFTCTRL" || u == "RIGHTCTRL") { ctrl = true; continue; }
                 if (u == "SHIFT" || u == "LEFTSHIFT" || u == "RIGHTSHIFT") { shift = true; continue; }
 
+                // 主键盘加号（0.2.3）：用户要求「仅限大键盘的加号」。
+                // 中文键盘上打 + 就是 Shift+Equals；小键盘 +（KeypadPlus）是另一个键。
+                if (u == "PLUS" || t == "加号") { plusToken = true; keyName = "Plus"; continue; }
+
+                // 主键盘等号（0.2.5，来源《魔法少女ノ魔女裁判》0.0.0.11）：玩家要求
+                // 「审慎避让游戏自带键」，重读键默认从 Backspace 挪到 `=`。为什么必须显式映射：
+                // `Enum.TryParse("=")` **不认这个符号**，会报「Unity 不认识这个键名」；
+                // 而 KeyCode.Equals 才是主键盘那个 `=`（小键盘回车旁的不算）。
+                // 顺便也认全角 `＝`（中文输入法下容易打出来）与显式写法 `Equals`。
+                if (t == "=" || t == "＝" || u == "EQUALS") { keyName = "Equals"; continue; }
+
                 if (keyName != null) { why = "有多个主键（" + keyName + " 和 " + t + "）"; return false; }
                 keyName = t;
             }
 
             if (keyName == null) { why = "只写了修饰键，没有主键"; return false; }
+
+            if (plusToken)
+            {
+                // 强制要求 Shift：主键盘 + 本身就是 Shift+Equals。
+                // 于是「按住 Ctrl+Alt 再按小键盘 +」不会触发（KeypadPlus 与 Equals 是两个键），
+                // 纯 Ctrl+Alt 也不会触发（没有主键）。
+                parsed.Key = KeyCode.Equals;
+                parsed.Alt = alt;
+                parsed.Ctrl = ctrl;
+                parsed.Shift = true;
+                return true;
+            }
 
             // G3：纯数字一律拒绝。Enum.TryParse("0") 会成功并给出 KeyCode.None，
             // 玩家会得到一个永远不触发的键，且没有任何提示 —— 这类静默失败必须拦在解析层。
@@ -121,27 +164,68 @@ namespace MeiKongA11y
         /// <summary>已解析的描述是否在这一帧刚被按下。</summary>
         public static bool Down(Spec s)
         {
+            bool down = false;
+            bool altHeld = false, ctrlHeld = false, shiftHeld = false;
+
+            // === 本地读取（UnityEngine.Input）===
             try
             {
-                if (!Input.GetKeyDown(s.Key)) return false;
-
-                bool altHeld = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
-                bool ctrlHeld = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
-                bool shiftHeld = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
-
-                // 写了哪个修饰键就要求哪个；没写的一律要求「没按住」，
-                // 免得配置写 F9 的玩家按 Alt+F9 时被我们抢走游戏自己的键。
-                if (s.Alt != altHeld) return false;
-                if (s.Ctrl != ctrlHeld) return false;
-                if (s.Shift != shiftHeld) return false;
-                return true;
+                down = Input.GetKeyDown(s.Key);
+                altHeld = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
+                ctrlHeld = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
+                shiftHeld = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
             }
             catch
             {
-                // 输入系统不可用（编辑器/无头）时当作没按，绝不把异常抛进游戏主循环
-                return false;
+                // Input 不可用（Input System-only / 无头）时本地读不到；
+                // 但全局那一路可能仍然可用，所以不在这里直接 return（0.2.3）。
+                down = false;
+                altHeld = false;
+                ctrlHeld = false;
+                shiftHeld = false;
             }
+
+            // === 全局读取（0.2.3）：窗口拿不到焦点时 Input 恒为 false ===
+            //
+            // 并集语义：任一来源说「按下」就算按下，任一来源说修饰键按住就算按住。
+            // 委托为 null（独立编译 / 未开 A11yHost.UseGlobalKeys）时这一段整体跳过。
+            Func<KeyCode, bool> gHeld = GlobalHeld;
+            if (gHeld != null)
+            {
+                try
+                {
+                    Func<KeyCode, bool> gPressed = GlobalPressed;
+                    down = down || (gPressed != null && gPressed(s.Key));
+                    altHeld = altHeld || gHeld(KeyCode.LeftAlt) || gHeld(KeyCode.RightAlt);
+                    ctrlHeld = ctrlHeld || gHeld(KeyCode.LeftControl) || gHeld(KeyCode.RightControl);
+                    shiftHeld = shiftHeld || gHeld(KeyCode.LeftShift) || gHeld(KeyCode.RightShift);
+                }
+                catch
+                {
+                    // 全局读取异常绝不冒进主循环
+                }
+            }
+
+            if (!down) return false;
+
+            // 写了哪个修饰键就要求哪个；没写的一律要求「没按住」，
+            // 免得配置写 F9 的玩家按 Alt+F9 时被我们抢走游戏自己的键。
+            if (s.Alt != altHeld) return false;
+            if (s.Ctrl != ctrlHeld) return false;
+            if (s.Shift != shiftHeld) return false;
+            return true;
         }
+
+        // ====================================================================
+        // 跨运行时备注（0.2.3）
+        //
+        // 1) 全局按键通过 GlobalHeld / GlobalPressed 两个委托注入，而不是直接引用
+        //    GlobalKeys.cs —— 本文件必须能**单文件**被 tools/zdsr_selftest 编译
+        //    （那里只 Include Zdsr.cs + Hotkey.cs，UnityEngine 用桩）。
+        //    注入发生在契约层 A11yHost.UseGlobalKeys 的 setter。
+        // 2) 本文件仍然不引用 A11yHost / BepInEx / 游戏类型，也不引用
+        //    Il2CppInterop / Il2CppSystem：委托签名只用 KeyCode，Mono / IL2CPP 都通用。
+        // ====================================================================
 
         private static bool IsAllDigits(string s)
         {

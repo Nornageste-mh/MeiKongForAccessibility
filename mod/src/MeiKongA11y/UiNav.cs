@@ -1,3 +1,20 @@
+// ============================================================================
+// ⚠⚠  0.2.x 遗留实现 —— 新作默认不启用  ⚠⚠
+//
+// 本文件是「UiNav 通用导航模式」：Tab 进入 / 退出 → 扫屏收集 Selectable →
+// 自己维护游标 → 接管 submit。它**不符合第 0 条纪律**（docs/交互形态纪律.md）：
+// 补丁不应该另造一个操作状态，界面的键盘操作应当是**游戏本身键盘能力的
+// 复用 / 补全**。
+//
+// 新作品先做 docs/交互形态判定.md 的 A / B / C 判定：
+//   · A 类（游戏已有完全键盘控制）：只朗读，**不要**调用 UiNav.Update()；
+//   · B / C 类：把键盘能力补在**游戏自己的**输入 / 焦点 / 动作函数上；
+//   · 任何情况下都不要新增「进入 / 退出模式」的开关。
+//
+// 保留本文件只为让已发布老作品**逐字节不变**（平台层是三作复用的冻结层）。
+// 保留不等于推荐 —— 新作不要照抄这个形态。
+// ============================================================================
+
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -32,12 +49,31 @@ namespace MeiKongA11y
     /// <summary>
     /// 菜单 / 存档 / 设置等界面的键盘导航与朗读。
     ///
-    ///   Tab          进入 / 退出导航模式
+    ///   Tab          进入 / 退出导航模式（**0.2.2 起可换**：优先问 A11yHost.NavTogglePressed，
+    ///                逐作可配 <c>Ctrl+Alt+G</c> 这类组合键；钩子没填时退回 Tab）
     ///   上 / 下      上一项 / 下一项
     ///   左 / 右      调整滑条
     ///   回车 / 空格  激活（按钮点击、开关切换、输入框聚焦）
     ///   Home / End   第一项 / 最后一项
     ///   PageUp/PageDown  切换面板组（默认只导航最上层那一组）
+    ///
+    /// === 标签的降级（0.2.2，用户反馈的问题 1）===
+    ///
+    ///   Bound    控件子树里的文本 / 逐作 GameLabelOf 给出的名字 → 照念
+    ///   Nearby   别名表 / 同一行的兄弟文本 → 照念
+    ///   Semantic 一条可读文字都没有 → 念「未命名按钮，第 3 项，共 7 项，面板设置」
+    ///   Raw      原始对象名 / 类型名 / ID → **默认不念**（A11yHost.CfgSpeakRawName），只进 Diag 日志
+    ///
+    ///   推断出来的标签（Semantic / Raw）下，激活键第一次只重复朗读并要求再按一次
+    ///   （A11yHost.CfgUnknownConfirm 默认 true）—— 见 Update 里的降级确认状态机。
+    ///
+    /// === IL2CPP 纪律（0.2.2，阻断级修复）===
+    ///
+    ///   本文件**不许**用 <c>as</c> / <c>is</c> 判断 Unity 组件类型。Il2CppInterop 是按
+    ///   「方法声明返回类型」造代理对象的：<c>s.transform</c> 拿到的代理声明类型是
+    ///   Transform，所以 <c>s.transform is RectTransform</c> 恒 false、<c>as</c> 恒 null，
+    ///   而且静默不报错（界面明明有控件，一个都扫不到；文本一个都读不到）。
+    ///   一律改用 <c>GetComponent&lt;T&gt;()</c>，它按原生类做兼容性判断。
     ///
     /// === 回车 / 空格的归属（状态机，见 F）===
     ///
@@ -208,6 +244,9 @@ namespace MeiKongA11y
             _pendingRescanFrame = -1;
             _announcedItem = null;
             ClearQuitConfirm();
+            // 退出导航 = 之前武装的降级确认作废，否则 8 秒内重新进入后按回车
+            // 会莫名其妙“确认”一个旧控件（与退出确认同一条清理纪律）。
+            ClearDegradedConfirm();
             ReleaseSelection();
             if (announce)
             {
@@ -318,7 +357,15 @@ namespace MeiKongA11y
                         continue;
                     }
                     if (!s.gameObject.scene.IsValid()) continue;   // 排除预制体资源
-                    if (!(s.transform is RectTransform)) continue; // 只处理 UI
+
+                    // 只处理 UI。**不能**写 `s.transform is RectTransform`：
+                    // IL2CPP（Il2CppInterop）按「方法的声明返回类型」造代理，
+                    // s.transform 的声明类型是 Transform，所以哪怕底层真是
+                    // RectTransform，`is` 也恒 false（`as` 恒 null），而且静默不报错。
+                    // 这行是 Scan 的第一道过滤器 —— 写成 is 的后果是「一个控件都扫不到」，
+                    // 玩家听到的是「当前界面上没有可操作的项目」。
+                    // GetComponent<T>() 走原生类兼容性判断，是 IL2CPP 下的正确写法。
+                    if (s.GetComponent<RectTransform>() == null) continue;
 
                     // 人工排除名单。默认排除标题画面的社交链接条：
                     // ClockwiseMenuController 的五个图标是玩家要的，它旁边那条
@@ -463,7 +510,9 @@ namespace MeiKongA11y
                         SiblingIndex = top.GetSiblingIndex(),
                         Camera = c.renderMode == RenderMode.ScreenSpaceOverlay ? null : c.worldCamera
                     };
-                    RectTransform crt = c.transform as RectTransform;
+                    // IL2CPP：`c.transform as RectTransform` 恒 null（代理按声明类型），
+                    // 用 GetComponent<RectTransform>()。
+                    RectTransform crt = c.GetComponent<RectTransform>();
                     if (crt != null)
                     {
                         g.CanvasRect = WorldRect(crt);
@@ -506,7 +555,10 @@ namespace MeiKongA11y
                 var k = new ItemKey { S = s, Row = int.MinValue, Left = float.MaxValue, Path = null };
                 try
                 {
-                    RectTransform rt = s != null ? s.transform as RectTransform : null;
+                    // IL2CPP：不能用 `s.transform as RectTransform`（恒 null），
+                    // 用 GetComponent<RectTransform>()。这一行决定「第几项」的顺序，
+                    // 失败的话整组退化成按层级排，和画面对不上。
+                    RectTransform rt = s != null ? s.GetComponent<RectTransform>() : null;
                     if (byPosition && rt != null)
                     {
                         rt.GetWorldCorners(_corners);   // 0=左下 1=左上 2=右上 3=右下
@@ -586,6 +638,49 @@ namespace MeiKongA11y
             return Rect.MinMaxRect(minX, minY, maxX, maxY);
         }
 
+        /// <summary>CanvasGroup alpha 低于这个值就不算「看得见」（0.2.4）。</summary>
+        private const float AlphaVisibleThreshold = 0.05f;
+
+        /// <summary>
+        /// 从 t 往上最多 12 层，任意一层 CanvasGroup.alpha ≤ 0.05 就算「被隐藏」。
+        ///
+        /// === 为什么 (0.2.4) ===
+        /// 本作 PlayerLine 那批预制体占位按钮是 **active 的**，但靠 CanvasGroup
+        /// alpha≈0 隐藏：isActiveAndEnabled、Canvas 矩形相交、UI 射线**全都能过**，
+        /// 于是 16 个占位按钮进了导航（实机日志：`[组 2] ... 项数=16`）。
+        /// 射线打得到不等于玩家看得见 —— 必须补 alpha 这道门槛。
+        /// </summary>
+        private static bool AlphaHidden(Transform t)
+        {
+            try
+            {
+                Transform cur = t;
+                for (int i = 0; cur != null && i < 12; i++)
+                {
+                    CanvasGroup cg = cur.GetComponent<CanvasGroup>();
+                    if (cg != null && cg.alpha <= AlphaVisibleThreshold) return true;
+                    cur = cur.parent;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>
+        /// 这个 Transform 上是不是一个「真在画面里」的控件（给行标签判断用；不发射线，
+        /// 因为 FirstTextOutside / HasOtherSelectable 是静态逻辑，不该依赖 EventSystem）。
+        /// </summary>
+        private static bool VisibleControlOn(Transform t)
+        {
+            try
+            {
+                if (t == null || !t.gameObject.activeInHierarchy) return false;
+                if (t.GetComponent<Selectable>() == null) return false;
+                return !AlphaHidden(t);
+            }
+            catch { return false; }
+        }
+
         /// <summary>
         /// 控件是不是**真的在画面上**：矩形要和 Canvas 相交，而且从它中心发出的一次
         /// UI 射线要能打到它（或它的子物体）身上。
@@ -603,7 +698,14 @@ namespace MeiKongA11y
         {
             try
             {
-                RectTransform rt = s.transform as RectTransform;
+                // 0.2.4【实机缺陷】CanvasGroup alpha≈0 的预制体占位：active、矩形在画布内、
+                // 射线也打得到，但不是画给玩家看的。先过 alpha 门槛（上溯 12 层），
+                // 再谈矩形与遮挡，免得白打一条射线。
+                if (AlphaHidden(s.transform)) return false;
+
+                // IL2CPP：`s.transform as RectTransform` 恒 null → 会误判成「判不出来、
+                // 一律不排除」，画面外控件全被收进来。用 GetComponent<RectTransform>()。
+                RectTransform rt = s.GetComponent<RectTransform>();
                 if (rt == null) return true;
 
                 // 1) 和 Canvas 矩形完全不相交 = 画面外
@@ -622,7 +724,12 @@ namespace MeiKongA11y
                 Vector2 screen = RectTransformUtility.WorldToScreenPoint(g.Camera, world);
                 var ped = new PointerEventData(es) { position = screen };
                 var hits = new List<RaycastResult>();
-                es.RaycastAll(ped, hits);
+                // 第二个参数的类型**两边不一样**：Mono 版（BepInEx 5 / PC）是
+                // System.Collections.Generic.List<RaycastResult>，IL2CPP 版
+                // （Il2CppInterop）是 Il2CppSystem.Collections.Generic.List<RaycastResult>。
+                // 同一份平台层源码要在两边都编得过，就不能写死任何一边，所以走
+                // RaycastAllCompat（反射拿运行时真正的参数类型）。详见该方法的注释。
+                if (!RaycastAllCompat(es, ped, hits)) return true;   // 判不出 → 不排除
                 if (hits.Count == 0) return true;      // 射线本身打不到任何东西 → 判不出来，不排除
 
                 for (int i = 0; i < hits.Count; i++)
@@ -636,6 +743,81 @@ namespace MeiKongA11y
                 return false;
             }
             catch { return true; }
+        }
+
+        // ---- EventSystem.RaycastAll 的跨运行时调用（Mono / IL2CPP）----
+        //
+        // 为什么不能直接写 `es.RaycastAll(ped, hits)`：
+        //   · Mono（BepInEx 5 / PC 版引用集）签名是 List<RaycastResult>（System 集合）；
+        //   · IL2CPP（Il2CppInterop）签名是 Il2CppSystem.Collections.Generic.List<RaycastResult>，
+        //     System 的 List 传进去是编译错误 CS1503（本作实机编译实测）。
+        // 平台层是同一份源码被两边复用，写死任何一边都会让另一边编不过；而引用
+        // Il2CppInterop 又是契约层红线（平台层不得依赖 IL2CPP 专用程序集）。
+        //
+        // 所以：反射拿 EventSystem.RaycastAll 的 MethodInfo（按名字 + 两个参数找，
+        // 不写参数类型，否则同样会绑死一种运行时），按它**运行时**的第二个参数类型
+        // 造一个空列表传进去，再把结果读回调用方的普通 List<RaycastResult>。
+        // 只有在「真的拿不到射线结果」时才返回 false，调用方按「判不出遮挡」处理
+        // （宁可多收控件，也不能因为一次反射失败把所有项都排除掉）。
+        private static MethodInfo _raycastAllMethod;
+        private static bool _raycastAllLookupDone;
+
+        /// <summary>
+        /// 调用 EventSystem.RaycastAll，把结果填进 results。返回 false = 这套运行时下
+        /// 判不出遮挡（调用方不应该据此排除控件）。
+        /// </summary>
+        private static bool RaycastAllCompat(EventSystem es, PointerEventData ped, List<RaycastResult> results)
+        {
+            if (es == null || ped == null || results == null) return false;
+            try
+            {
+                if (!_raycastAllLookupDone)
+                {
+                    _raycastAllLookupDone = true;
+                    MethodInfo[] methods = es.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance);
+                    for (int i = 0; i < methods.Length; i++)
+                    {
+                        MethodInfo m = methods[i];
+                        if (m.Name != "RaycastAll") continue;
+                        if (m.GetParameters().Length != 2) continue;
+                        _raycastAllMethod = m;
+                        break;
+                    }
+                }
+                if (_raycastAllMethod == null) return false;
+
+                ParameterInfo[] pars = _raycastAllMethod.GetParameters();
+                object runtimeList = Activator.CreateInstance(pars[1].ParameterType);
+                if (runtimeList == null) return false;
+
+                _raycastAllMethod.Invoke(es, new object[] { ped, runtimeList });
+
+                results.Clear();
+                System.Collections.IEnumerable seq = runtimeList as System.Collections.IEnumerable;
+                if (seq != null)
+                {
+                    foreach (object item in seq)
+                    {
+                        if (item is RaycastResult) results.Add((RaycastResult)item);
+                    }
+                    return true;
+                }
+
+                // 少数运行时不给非泛型 IEnumerable：退回 Count / Item 索引器。
+                Type lt = runtimeList.GetType();
+                PropertyInfo countProp = lt.GetProperty("Count");
+                PropertyInfo itemProp = lt.GetProperty("Item");
+                if (countProp == null || itemProp == null) return false;
+                int n = (int)countProp.GetValue(runtimeList, null);
+                for (int i = 0; i < n; i++)
+                    results.Add((RaycastResult)itemProp.GetValue(runtimeList, new object[] { i }));
+                return true;
+            }
+            catch
+            {
+                // 反射/代理构造失败都当「判不出」，绝不把异常抛给 Scan。
+                return false;
+            }
         }
 
         // ================= 诊断（配置「界面诊断日志」打开时才输出）=================
@@ -668,7 +850,8 @@ namespace MeiKongA11y
         {
             try
             {
-                RectTransform rt = s != null ? s.transform as RectTransform : null;
+                // IL2CPP：不能用 `s.transform as RectTransform`，见 Scan 里的说明。
+                RectTransform rt = s != null ? s.GetComponent<RectTransform>() : null;
                 if (rt == null) return "位置=?";
                 rt.GetWorldCorners(_corners);
                 float top = Mathf.Max(_corners[1].y, _corners[2].y);
@@ -752,7 +935,11 @@ namespace MeiKongA11y
                 for (int i = 0; i < all.Length && parts.Count < 3; i++)
                 {
                     if (all[i] == null) continue;
-                    string txt = Norm(all[i].text);
+                    // 必须先过 Noise（逐作 GameTextIsNoise），再判「有没有文字」。
+                    // 顺序反了的话，预制体占位文本（`New Text` / `Button`）会被当成
+                    // 可读标签，GameLabelOf 那条逐作钩子永远轮不到被调用 ——
+                    // 而「有文本但读错」的控件正是钩子唯一能纠正的那类。
+                    string txt = Noise(Norm(all[i].text));
                     if (txt.Length == 0) continue;
                     bool dup = false;
                     for (int j = 0; j < parts.Count; j++)
@@ -818,6 +1005,17 @@ namespace MeiKongA11y
                     if (s == null) continue;
                     Transform t = s.transform;
                     if (t == exclude || t.IsChildOf(exclude)) continue;
+
+                    // === 0.2.4【实机缺陷】只算「真在画面里」的控件 ===
+                    //
+                    // 旧实现用 GetComponentsInChildren<Selectable>(true)，把**未激活**的
+                    // 控件也算成「这一行里还有别的控件」，于是判定为「面板」→
+                    // FirstTextOutside 直接 return ""，行标签彻底拿不到。
+                    // 本作设置面板的 Item_Switch / Item_Toggle 内部就各带一个未激活的
+                    // ToggleItem/Toggle，结果是同一行的 text_Name（「游戏时不显示」）
+                    // 永远没机会被读到，开关只剩「未命名按钮」。
+                    if (!s.gameObject.activeInHierarchy) continue;
+                    if (AlphaHidden(t)) continue;
                     return true;
                 }
             }
@@ -843,17 +1041,20 @@ namespace MeiKongA11y
                     Component c = cands[i];
                     if (c == null) continue;
                     if (!c.gameObject.activeInHierarchy) continue;
+                    // 0.2.4：alpha≈0 的文字也是「看不见」的，不能当行标签。
+                    if (AlphaHidden(c.transform)) continue;
 
                     Transform tt = c.transform;
                     if (tt == exclude || tt.IsChildOf(exclude)) continue;
 
-                    // 从这段文字往上走，只要在本行范围内遇到别的 Selectable，就说明
-                    // 它属于那个控件，不是行标签。
+                    // 从这段文字往上走，只要在本行范围内遇到别的**可见**控件，就说明
+                    // 它属于那个控件，不是行标签。未激活/alpha=0 的隐藏控件不算
+                    // （0.2.4：否则设置行的 text_Name 会被内部未激活的 Toggle 挡掉）。
                     bool other = false;
                     Transform cur = tt;
                     while (cur != null && cur != parent)
                     {
-                        if (cur.GetComponent<Selectable>() != null) { other = true; break; }
+                        if (VisibleControlOn(cur)) { other = true; break; }
                         cur = cur.parent;
                     }
                     if (other) continue;
@@ -869,9 +1070,18 @@ namespace MeiKongA11y
         /// <summary>取组件上的文本，TMP 与旧版 Text 都认。</summary>
         private static string TextOn(Component c)
         {
-            TextMeshProUGUI tmp = c as TextMeshProUGUI;
+            if (c == null) return "";
+
+            // === IL2CPP：这里是「文本读取的唯一收口」，绝不能写 as ===
+            //
+            // FirstTextOutside 传进来的是按 Component 取出来的对象；Il2CppInterop
+            // 按「方法声明返回类型」造代理，所以 `c as TextMeshProUGUI` / `c as Text`
+            // 恒 null —— 后果不是报错，而是所有控件都读不到文字、全部退化到
+            // 对象名 / 语义描述（而且第一版连对象名都念）。用 GetComponent<T>()
+            // 让原生层判断「这个 GameObject 上有没有这个组件」。
+            TextMeshProUGUI tmp = c.GetComponent<TextMeshProUGUI>();
             if (tmp != null) return Noise(Norm(tmp.text));
-            Text legacy = c as Text;
+            Text legacy = c.GetComponent<Text>();
             if (legacy != null) return Noise(Norm(legacy.text));
             return "";
         }
@@ -940,6 +1150,54 @@ namespace MeiKongA11y
             return "";
         }
 
+        // ================= 标签解析（0.2.2：分层质量）=================
+        //
+        // 用户反馈的问题 1：控件绑定的 Text 读不到时，平台层直接把 GameObject 名 /
+        // 类型名 / ID 当标签念出来，而且**没有任何降级行为**就执行激活。
+        //
+        // 根因是旧 TextOf 的最后一行 `return AncestorNameOf(s)`（AncestorNameOf 最后
+        // `return s.gameObject.name`）—— 它保证 TextOf 永远返回非空字符串，调用方
+        // 无法区分「真标签」和「对象名」。对象名还经常长得像人话（Exit / Close），
+        // 玩家会以为自己听到的就是那个按钮的名字。
+        //
+        // 现在把「标签」和「它的可信度」一起返回（LabelResult），调用方据此决定：
+        //   Bound    直接念（子树文字 / 逐作 GameLabelOf）
+        //   Nearby   直接念（别名表 / 同行兄弟文字）
+        //   Semantic 念结构化语义描述（SemanticText），并进入激活前二次确认
+        //   Raw      原始对象名；只有 CfgSpeakRawName=true 才念，否则同 Semantic。
+        //            原始名一律写 Diag 日志，方便排查「这个控件到底是什么」。
+
+        /// <summary>标签可信度。数值越大越不可信；调用方用 &gt;= Semantic 判「这是推断出来的」。</summary>
+        internal enum LabelQuality
+        {
+            Bound = 0,     // 控件自己的文本 / 逐作钩子给出的名字
+            Nearby = 1,    // 别名表 / 同一行的兄弟文本
+            Semantic = 2,  // 没有任何可读文字 → 结构化语义描述
+            Raw = 3        // 原始对象名 / 类型名 / ID
+        }
+
+        /// <summary>一次标签解析的结果。</summary>
+        internal struct LabelResult
+        {
+            public string Text;
+            public LabelQuality Quality;
+            public string Source;   // own / gamelabel / alias / row / placeholder / role / ancestor / semantic
+
+            public LabelResult(string text, LabelQuality quality, string source)
+            {
+                Text = text;
+                Quality = quality;
+                Source = source;
+            }
+        }
+
+        /// <summary>原始标识（对象名 / 类型名）是否允许念出来。为 null 按 false 处理。</summary>
+        private static bool SpeakRawName()
+        {
+            try { return A11yHost.CfgSpeakRawName != null && A11yHost.CfgSpeakRawName.Value; }
+            catch { return false; }
+        }
+
         /// <summary>
         /// 控件的可读标签。
         ///
@@ -957,16 +1215,25 @@ namespace MeiKongA11y
         ///
         ///   1) 自己子树有文本 → 直接用（存档槽、按钮等绝大多数情况走这条，行为不变）
         ///   2) 同一行的兄弟文本 → 用，并在前面补上所属行名（窗口分辨率、画面模式…）
-        ///   3) 都没有 → 从自己往上找第一个有意思的名字，跳过样板名
+        ///   3) 逐作钩子 / 别名表 → 见下面的顺序
+        ///   4) 都没有 → 不念对象名，返回 Semantic（调用方换成 SemanticText）
         /// </summary>
-        private static string TextOf(Selectable s)
+        private static LabelResult ResolveLabel(Selectable s)
         {
-            string own = OwnTextOf(s);
-            if (own.Length > 0) return own;
+            if (s == null) return new LabelResult("", LabelQuality.Semantic, "semantic");
 
-            // 逐作钩子放在「同行兄弟文字」**之前**，让它有覆盖权：
+            // 输入框走自己的规则：OwnTextOf 读到的是「已输入的内容 + 占位提示」，
+            // 拼成标签会变成「<内容>，输入框，当前内容 <内容>」。
+            TMP_InputField inf = s.GetComponent<TMP_InputField>();
+            if (inf != null) return ResolveInputLabel(inf);
+
+            // 1) 自己子树里的文本（已过 Noise）
+            string own = OwnTextOf(s);
+            if (own.Length > 0) return new LabelResult(own, LabelQuality.Bound, "own");
+
+            // 2) 逐作钩子放在「同行兄弟文字」**之前**，让它有覆盖权：
             // 有些控件的同行文字不是它的标签（实测：音乐播放器滑条的同行是**当前曲名**，
-            // 念出来成了「何为幸福(Full Version)，滑条」——把曲名当成了控件名）。
+            // 念出来成了「<曲名>，滑条」——把曲名当成了控件名）。
             // 钩子返回空串时照旧往下走，所以对没覆盖到的控件没有任何影响。
             try
             {
@@ -974,11 +1241,13 @@ namespace MeiKongA11y
                 if (fGame != null)
                 {
                     string gameFirst = fGame(s);
-                    if (!string.IsNullOrEmpty(gameFirst)) return gameFirst;
+                    if (!string.IsNullOrEmpty(gameFirst))
+                        return new LabelResult(gameFirst, LabelQuality.Bound, "gamelabel");
                 }
             }
             catch { }
 
+            // 3) 别名表 + 同行兄弟文字
             string row = AliasAncestorOf(s);
             string near = RowTextOf(s);
             if (near.Length > 0)
@@ -987,20 +1256,155 @@ namespace MeiKongA11y
                 {
                     // 别名命中控件**自己**时（确认框的 Yes/No 这类纯图片按钮），
                     // 面板上的问题读在前、按钮名读在后：
-                    //   「确定要使用这个姓名吗，确定，按钮」
+                    //   「<确认文案>，确定，按钮」
                     // 别名来自祖先行名时保持原顺序（「窗口分辨率，1280×720」）。
-                    if (AliasOnSelf(s)) return near + "，" + row;
-                    return row + "，" + near;
+                    if (AliasOnSelf(s))
+                        return new LabelResult(near + "，" + row, LabelQuality.Nearby, "alias+row");
+                    return new LabelResult(row + "，" + near, LabelQuality.Nearby, "alias+row");
                 }
-                return near;
+                return new LabelResult(near, LabelQuality.Nearby, "row");
             }
 
-            if (row.Length > 0) return row;
+            if (row.Length > 0) return new LabelResult(row, LabelQuality.Nearby, "alias");
 
-            return AncestorNameOf(s);
+            // 4) 一条可读文字都没有：默认不念原始名（CfgSpeakRawName）
+            return RawOrSemantic(s);
         }
 
-        /// <summary>兜底：从自己往上找第一个不是样板名的对象名。</summary>
+        /// <summary>兜底：CfgSpeakRawName 打开时返回原始名（Raw），否则返回 Semantic（空文本）。</summary>
+        private static LabelResult RawOrSemantic(Selectable s)
+        {
+            string raw = "";
+            try { raw = AncestorNameOf(s); } catch { }
+
+            // 原始名只进诊断日志：没开「界面诊断日志」时它永远不会出现在任何地方。
+            Diag("未命名控件：类型=" + ControlTypeName(s)
+                 + " 原始名=" + (raw.Length > 0 ? raw : "?")
+                 + " 路径=" + (s != null ? PathOf(s.transform) : "?"));
+
+            if (SpeakRawName() && raw.Length > 0)
+                return new LabelResult(raw, LabelQuality.Raw, "ancestor");
+            return new LabelResult("", LabelQuality.Semantic, "semantic");
+        }
+
+        /// <summary>
+        /// 旧调用点的兼容包装：只要字符串（不关心质量时用）。
+        /// **不要**再用它判「有没有标签」—— 推断标签的 Text 是空串，
+        /// 请用 ResolveLabel + SemanticText。
+        /// </summary>
+        private static string TextOf(Selectable s)
+        {
+            return ResolveLabel(s).Text;
+        }
+
+        /// <summary>朗读用的标签：可信标签照念，推断标签换成结构化语义描述。</summary>
+        private static string LabelText(Selectable s, LabelResult r)
+        {
+            if (r.Quality == LabelQuality.Semantic) return SemanticText(s);
+            if (r.Quality == LabelQuality.Raw && !SpeakRawName()) return SemanticText(s);
+            return string.IsNullOrEmpty(r.Text) ? SemanticText(s) : r.Text;
+        }
+
+        /// <summary>
+        /// 结构化语义描述：「未命名<控件类型>，第 N 项，共 M 项，面板<组名>」。
+        ///
+        /// 这是平台层补上的 L2 层：旧实现从 L1（同行文字）直接跳到 L3（对象名），
+        /// 中间没有任何「说清楚它在哪」的能力。序号用 Scan 排好的 Items 顺序，
+        /// 因此和画面上「第几项」一致（CfgSortByPosition=false 时按层级，见 README）。
+        /// </summary>
+        private static string SemanticText(Selectable s)
+        {
+            var sb = new StringBuilder();
+            sb.Append("未命名").Append(ControlTypeName(s));
+
+            int n = ItemNumber(s);
+            int total = ItemCount(s);
+            if (n > 0) sb.Append("，第 ").Append(n).Append(" 项");
+            if (total > 0) sb.Append("，共 ").Append(total).Append(" 项");
+
+            string grp = GroupLabelOf(s);
+            if (!string.IsNullOrEmpty(grp)) sb.Append("，").Append(grp);
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 控件类型的中文说法。
+        ///
+        /// **不能**用 GetType().Name：IL2CPP 代理的 GetType() 只给出声明类型
+        /// （念出来是 `Selectable`），连真实类型名都没有；也不能用 `is`/`as`
+        /// （见文件头「IL2CPP 纪律」）。用 GetComponent<T>() 让原生层回答。
+        /// </summary>
+        private static string ControlTypeName(Selectable s)
+        {
+            if (s == null) return "控件";
+            try
+            {
+                if (s.GetComponent<TMP_InputField>() != null) return "输入框";
+                if (s.GetComponent<Toggle>() != null) return "开关";
+                if (s.GetComponent<Slider>() != null) return "滑条";
+                if (s.GetComponent<Scrollbar>() != null) return "滚动条";
+                if (s.GetComponent<Button>() != null) return "按钮";
+            }
+            catch { }
+            return "控件";
+        }
+
+        /// <summary>控件在当前组里的序号（1 基）；找不到返回 0。</summary>
+        private static int ItemNumber(Selectable s)
+        {
+            try
+            {
+                int total;
+                int idx = IndexOfItem(s, out total);
+                return idx >= 0 ? idx + 1 : 0;
+            }
+            catch { return 0; }
+        }
+
+        /// <summary>控件所在组的项数；找不到返回 0。</summary>
+        private static int ItemCount(Selectable s)
+        {
+            try
+            {
+                int total;
+                IndexOfItem(s, out total);
+                return total;
+            }
+            catch { return 0; }
+        }
+
+        /// <summary>
+        /// 控件在 Groups 里的位置：返回值是组内 0 基下标（-1 = 没找到），
+        /// total 是该组的项数（找不到时 0）。扫全部组，因为诊断转储和重扫过程中
+        /// 会 Describe 不在当前组里的控件。
+        /// </summary>
+        private static int IndexOfItem(Selectable s, out int total)
+        {
+            total = 0;
+            if (s == null) return -1;
+            for (int g = 0; g < Groups.Count; g++)
+            {
+                List<Selectable> list = Groups[g].Items;
+                for (int i = 0; i < list.Count; i++)
+                {
+                    if (list[i] == s)   // Unity ==：伪空对象也认
+                    {
+                        total = list.Count;
+                        return i;
+                    }
+                }
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// 兜底：从自己往上找第一个不是样板名的对象名。
+        ///
+        /// **只用于诊断日志**，以及 CfgSpeakRawName 明确打开时的 Raw 标签。
+        /// 绝不允许把它直接当朗读标签 —— 那正是用户反馈里「念 GameObject 名 /
+        /// 类型名 / ID」的来源。这里保留最后的 `return s.gameObject.name`
+        /// 是为了日志能指认到底是哪个控件（排查「念不出名字」时唯一的线索）。
+        /// </summary>
         private static string AncestorNameOf(Selectable s)
         {
             try
@@ -1030,36 +1434,80 @@ namespace MeiKongA11y
         }
 
         /// <summary>
-        /// 输入框的标签。**不能**走 TextOf：它的第一层 OwnTextOf 读的是
-        /// 输入框自己子树里的 TMP，那是「已输入的内容」和占位提示，
-        /// 念出来会变成「李，输入框，当前内容 李」这种重复噪声。
+        /// 输入框的标签。**不能**走 ResolveLabel 的普通分支：它的第一层 OwnTextOf
+        /// 读的是输入框自己子树里的 TMP，那是「已输入的内容」和占位提示，
+        /// 念出来会变成「<已输入内容>，输入框，当前内容 <已输入内容>」这种重复噪声。
+        ///
+        /// 顺序与旧 InputFieldLabel 一致（逐作角色名 → 逐作钩子 → 占位提示 →
+        /// 别名 → 同行），只是最后一步从「念对象名」改成「返回 Semantic」。
         /// </summary>
-        private static string InputFieldLabel(TMP_InputField inf)
+        private static LabelResult ResolveInputLabel(TMP_InputField inf)
         {
             string role = InputFieldRoleName(inf);
-            if (role.Length > 0) return role;
+            if (role.Length > 0) return new LabelResult(role, LabelQuality.Bound, "role");
 
-            // 逐作钩子优先：输入框的同行标签（「循环次数」「专注时长」）比占位提示可靠
+            // 逐作钩子优先：输入框的同行标签（「循环次数」「专注时长」）比占位提示可靠。
+            // 但要先挡掉「本地化 key 被当标签」的情况 —— 那属于第 4 类退化
+            // （玩家听到的是 `UI.Setting.Name` 这种内部编号）。
             try
             {
                 var fGame = A11yHost.GameLabelOf;
                 if (fGame != null)
                 {
                     string gameLabel = fGame(inf);
-                    if (!string.IsNullOrEmpty(gameLabel)) return gameLabel;
+                    if (!string.IsNullOrEmpty(gameLabel))
+                    {
+                        if (LooksLikeLocKey(gameLabel))
+                            Diag("输入框标签像本地化 key，已跳过：" + gameLabel);
+                        else
+                            return new LabelResult(gameLabel, LabelQuality.Bound, "gamelabel");
+                    }
                 }
             }
             catch { }
 
             string ph = PlaceholderText(inf);
-            if (ph.Length > 0) return ph;
+            if (ph.Length > 0 && LooksLikeLocKey(ph))
+            {
+                Diag("输入框占位提示像本地化 key，已跳过：" + ph);
+                ph = "";
+            }
+            if (ph.Length > 0) return new LabelResult(ph, LabelQuality.Nearby, "placeholder");
 
             string row = AliasAncestorOf(inf);
             string near = RowTextOf(inf);
-            if (near.Length > 0) return (row.Length > 0 && row != near) ? row + "，" + near : near;
-            if (row.Length > 0) return row;
+            if (near.Length > 0)
+                return new LabelResult((row.Length > 0 && row != near) ? row + "，" + near : near,
+                                       LabelQuality.Nearby, "row");
+            if (row.Length > 0) return new LabelResult(row, LabelQuality.Nearby, "alias");
 
-            return AncestorNameOf(inf);
+            return RawOrSemantic(inf);
+        }
+
+        /// <summary>
+        /// 这段文字像不像「本地化 key / 内部 ID」。
+        ///
+        /// 本作大量文本走 LocalizeStringEvent / 本地化表（见 probe 类型清单）。
+        /// 本地化组件的 m_Key 形如 `UI.Setting.Name` / `Common.Button.OK`：
+        /// 没有空格、只用点/下划线分段、全 ASCII。念出来对玩家毫无意义，
+        /// 比「未命名按钮」还糟。这里只做**保守**判断（宁可漏判也不误伤真标签）：
+        /// 必须同时满足「含 . 或 _ 分隔」「全 ASCII」「没有空格」「至少两段」。
+        /// 真正的英文标签（`Start`）不含分隔符，不会被挡。
+        /// </summary>
+        private static bool LooksLikeLocKey(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+            if (text.IndexOf(' ') >= 0) return false;
+            bool hasSep = false;
+            int segments = 1;
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = text[i];
+                if (c == '.' || c == '_') { hasSep = true; segments++; continue; }
+                if (c >= 0x2E80) return false;              // 含中日韩字符 → 是给人看的文字
+                if (c < 0x20 || c > 0x7E) return false;     // 非可见 ASCII → 不判
+            }
+            return hasSep && segments >= 2;
         }
 
         /// <summary>滑条当前值的说法。0-1 范围的条按百分比念，否则念 N / M。</summary>
@@ -1073,34 +1521,71 @@ namespace MeiKongA11y
         private static string Describe(Selectable s)
         {
             var sb = new StringBuilder();
+            if (s == null) return "";
 
-            Toggle t = s as Toggle;
-            Slider sl = s as Slider;
-            TMP_InputField inf = s as TMP_InputField;
+            // IL2CPP：必须 GetComponent<T>()，不能 as/is（见文件头「IL2CPP 纪律」）。
+            // 写成 `s as Toggle` 的话类型判定恒 null → 所有开关/滑条/输入框
+            // 都被当成普通控件，"已进入输入框，直接打字" 永不出现。
+            Toggle t = s.GetComponent<Toggle>();
+            Slider sl = s.GetComponent<Slider>();
+            TMP_InputField inf = s.GetComponent<TMP_InputField>();
 
-            sb.Append(inf != null ? InputFieldLabel(inf) : TextOf(s));
+            // 标签：可信的照念；推断出来的（Semantic、或 Raw 但没允许念原名）
+            // 换成结构化语义描述「未命名按钮，第 N 项，共 M 项，面板…」。
+            LabelResult label = ResolveLabel(s);
+            bool semantic = label.Quality == LabelQuality.Semantic
+                            || (label.Quality == LabelQuality.Raw && !SpeakRawName());
+            sb.Append(LabelText(s, label));
 
             if (inf != null)
             {
-                sb.Append("，输入框");
+                // 语义描述里已经含「输入框」，不要重复
+                if (!semantic) sb.Append("，输入框");
                 string cur = Norm(inf.text);
-                if (cur.Length > 0) sb.Append("，当前内容 ").Append(cur);
+                if (cur.Length > 0)
+                {
+                    if (LooksLikeLocKey(cur))
+                        Diag("输入框当前内容像本地化 key，已跳过：" + cur);
+                    else
+                        sb.Append("，当前内容 ").Append(cur);
+                }
                 else sb.Append("，当前为空");
                 if (inf.characterLimit > 0 && inf.characterLimit <= 8)
                     sb.Append("，最多 ").Append(inf.characterLimit).Append(" 个字");
             }
-            else if (t != null) sb.Append("，开关，").Append(t.isOn ? "开" : "关");
-            else if (sl != null) sb.Append("，滑条，").Append(SliderValueText(sl));
-            else if (s is Button) sb.Append("，按钮");
-            else sb.Append("，").Append(s.GetType().Name);
+            else if (t != null)
+            {
+                if (semantic) sb.Append("，").Append(t.isOn ? "开" : "关");
+                else sb.Append("，开关，").Append(t.isOn ? "开" : "关");
+            }
+            else if (sl != null)
+            {
+                if (semantic) sb.Append("，").Append(SliderValueText(sl));
+                else sb.Append("，滑条，").Append(SliderValueText(sl));
+            }
+            else if (!semantic)
+            {
+                // 类型后缀。**不能**写 s.GetType().Name：IL2CPP 代理的 GetType()
+                // 只返回声明类型（Selectable），念出来等于没信息。
+                sb.Append("，").Append(ControlTypeName(s));
+            }
 
             if (!s.interactable) sb.Append("，不可用");
             return sb.ToString();
         }
 
+        private const string GroupFallbackName = "面板";
+
         /// <summary>
-        /// 面板组的中文名。逐作钩子命中就用它，否则退回根对象名。
-        /// （不改钩子的那三作仍然念 Canvas 路径下的根对象名，行为不变。）
+        /// 面板组的中文名。
+        ///
+        /// 顺序：逐作钩子 → 名字本身含中文（照念）→ CfgSpeakRawName 打开时念原名 →
+        /// 中性兜底「面板」。
+        ///
+        /// 为什么不再无脑念根对象名（0.2.2）：Canvas 下的顶层祖先名都是英文
+        /// （`Right` / `UpRight` / `Canvas`），每次进组都念一遍既难听又不提供信息；
+        /// 但直接丢掉也不行 —— 多组时全叫「面板」没法区分，所以兜底名带组号
+        /// （见 <see cref="GroupLabel"/>）：「面板1」「面板2」。
         /// </summary>
         private static string GroupName(Transform root)
         {
@@ -1114,7 +1599,62 @@ namespace MeiKongA11y
                 }
             }
             catch { }
-            return root != null ? root.name : "?";
+
+            if (root == null) return GroupFallbackName;
+            string name = root.name ?? "";
+            if (HasCjk(name)) return name;          // 中文对象名本身就是给人看的
+            if (SpeakRawName()) return name;        // 逐作明确要求念原名（排查用）
+            Diag("组名没有中文来源，用中性兜底「" + GroupFallbackName + "」（原始名=" + name + "）");
+            return GroupFallbackName;
+        }
+
+        /// <summary>字符串里有没有中日韩字符（判断对象名是不是给人看的文字）。</summary>
+        private static bool HasCjk(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return false;
+            for (int i = 0; i < s.Length; i++)
+            {
+                if (s[i] >= 0x2E80) return true;
+            }
+            return false;
+        }
+
+        /// <summary>第 gi 组在朗读里的名字：兜底名带组号，避免四组全叫「面板」。</summary>
+        private static string GroupLabel(int gi)
+        {
+            if (gi < 0 || gi >= Groups.Count) return GroupFallbackName;
+            string n = GroupName(Groups[gi].Root);
+            if (string.Equals(n, GroupFallbackName, StringComparison.Ordinal)) return n + (gi + 1);
+            return n;
+        }
+
+        /// <summary>
+        /// 某个控件所在组在**语义描述**里的说法：有名字时补「面板」前缀
+        /// （「面板设置」），兜底名已经带「面板」和组号（「面板2」）。
+        /// 返回空串表示找不到组。
+        /// </summary>
+        private static string GroupLabelOf(Selectable s)
+        {
+            try
+            {
+                if (s == null) return "";
+                for (int g = 0; g < Groups.Count; g++)
+                {
+                    List<Selectable> list = Groups[g].Items;
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        if (list[i] == s)
+                        {
+                            string n = GroupName(Groups[g].Root);
+                            if (string.Equals(n, GroupFallbackName, StringComparison.Ordinal))
+                                return GroupFallbackName + (g + 1);   // 「面板2」
+                            return "面板" + n;                       // 「面板设置」
+                        }
+                    }
+                }
+            }
+            catch { }
+            return "";
         }
 
         /// <summary>组的排序权重，没填钩子时恒为同一个值（排序行为不变）。</summary>
@@ -1147,7 +1687,7 @@ namespace MeiKongA11y
 
         private static string GroupPrefix(bool verbose)
         {
-            string gname = GroupName(Groups[_groupIndex].Root);
+            string gname = GroupLabel(_groupIndex);
             var sb = new StringBuilder();
             if (Groups.Count <= 1)
             {
@@ -1165,7 +1705,7 @@ namespace MeiKongA11y
                 {
                     if (Groups[i].Items.Count == 0) continue;
                     if (shown > 0) sb.Append('；');
-                    sb.Append(i == _groupIndex ? "【" : "").Append(GroupName(Groups[i].Root))
+                    sb.Append(i == _groupIndex ? "【" : "").Append(GroupLabel(i))
                       .Append(' ').Append(Groups[i].Items.Count).Append(" 项").Append(i == _groupIndex ? "】" : "");
                     shown++;
                 }
@@ -1184,8 +1724,9 @@ namespace MeiKongA11y
             _announcedItem = s;
             SelectByUs(s.gameObject);
 
-            // 光标移到别处 = 放弃刚才那次退出确认
+            // 光标移到别处 = 放弃刚才那次退出确认 / 降级确认
             ClearQuitConfirm();
+            ClearDegradedConfirm();
 
             Repeat.Say(prefix + Describe(s) + "。" + (_index + 1) + " / " + Items.Count, true);
         }
@@ -1318,7 +1859,7 @@ namespace MeiKongA11y
             try
             {
                 A11yHost.Log.LogInfo("[UiNav] 退出确认：「" + s.gameObject.name + "」标签「"
-                    + TextOf(s) + "」场景 " + SceneManager.GetActiveScene().name);
+                    + LabelText(s, ResolveLabel(s)) + "」场景 " + SceneManager.GetActiveScene().name);
             }
             catch { }
             Repeat.Say("这是退出游戏。再按一次回车或空格确认退出，按别的键取消。", true);
@@ -1329,28 +1870,142 @@ namespace MeiKongA11y
             _pendingQuit = null;
         }
 
+        // ================= 降级确认（0.2.2）=================
+        //
+        // 用户反馈的问题 1 的另一半：读不到可读文字时，旧实现**没有任何降级行为
+        // 就执行激活** —— 玩家听到「Exit」「Button (6)」或者干脆只有类型名，
+        // 按回车就把动作做掉了。对象名看起来像人话这一点尤其危险
+        // （`Load` / `Exit` / `Close` 真的就是对象名），玩家无法判断自己听到的
+        // 到底是控件标签还是内部标识。
+        //
+        // 现在：标签是**推断**出来的（Semantic，或 Raw）时，第一次按激活键只
+        // 重复朗读 + 提示再按一次；第二次才真正 Activate。状态机与退出确认同构
+        // （同样的 8 秒窗口、同样的“换项/退出即清除”），避免两套语义。
+        //
+        // 顺序：退出确认**优先**（Update 里先处理 NeedsQuitConfirm）。退出本来就是
+        // 危险动作，若同时再叠一层降级确认，玩家要按三次回车才能退出 —— 所以
+        // 已武装退出确认时直接跳过降级确认。
+
+        private static Selectable _degradedTarget;
+        private static float _degradedUntil;
+
+        private const float DegradedConfirmSeconds = QuitConfirmSeconds;   // 与退出确认同窗口
+
+        /// <summary>降级确认开关。为 null 按 true（安全默认值）。</summary>
+        private static bool UnknownConfirmEnabled()
+        {
+            try { return A11yHost.CfgUnknownConfirm == null || A11yHost.CfgUnknownConfirm.Value; }
+            catch { return true; }
+        }
+
+        /// <summary>这个控件的标签是不是推断出来的（需要二次确认）。</summary>
+        private static bool NeedsDegradedConfirm(Selectable s)
+        {
+            if (s == null || !UnknownConfirmEnabled()) return false;
+            try
+            {
+                LabelResult r = ResolveLabel(s);
+                return r.Quality >= LabelQuality.Semantic;   // Bound/Nearby 可信，Semantic/Raw 是推断
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// 标签是不是「只能落到未命名语义描述」这一级：没有任何可读来源
+        /// （无 Text、无逐作 GameLabelOf、无别名、无同行文字），只剩
+        /// 「未命名&lt;类型&gt;，第 N 项」。给激活前的硬阻止用（0.2.4）。
+        /// </summary>
+        private static bool IsUnnamedLabel(Selectable s)
+        {
+            if (s == null) return false;
+            try
+            {
+                LabelResult r = ResolveLabel(s);
+                return r.Quality == LabelQuality.Semantic
+                       || (r.Quality == LabelQuality.Raw && !SpeakRawName());
+            }
+            catch { return false; }
+        }
+
+        private static bool DegradedConfirmArmed(Selectable s)
+        {
+            if (_degradedTarget == null) return false;
+            if (Time.realtimeSinceStartup - _degradedUntil > 0f)
+            {
+                ClearDegradedConfirm();
+                return false;
+            }
+            return _degradedTarget == s;   // Unity ==：伪空对象也认
+        }
+
+        private static void ArmDegradedConfirm(Selectable s)
+        {
+            _degradedTarget = s;
+            _degradedUntil = Time.realtimeSinceStartup + DegradedConfirmSeconds;
+
+            // 原始对象名只进日志（CfgDiagLog / DiagOn 打开时才写），不念。
+            Diag("降级确认：路径=" + PathOf(s.transform));
+
+            // 先念能念的（语义描述 + 类型/状态），再要求确认。
+            // 必须 interrupt=true：这条提示要是被上一条盖掉，用户就不知道自己在确认什么。
+            Repeat.Say(Describe(s) + "。未命名控件，已阻止操作。再按一次确认；按别的键取消。", true);
+        }
+
+        private static void ClearDegradedConfirm()
+        {
+            _degradedTarget = null;
+            _degradedUntil = 0f;
+        }
+
+        /// <summary>
+        /// 每帧校验：目标失效 / 切组 / 退出导航 / 场景切换时清掉。
+        /// 这是「清理点一个都不能漏」的兜底 —— 即使某条路径忘了显式调用，
+        /// 也不会在 8 秒内按回车确认到一个已经不存在的旧控件。
+        /// </summary>
+        private static void ValidateDegradedConfirm()
+        {
+            if (_degradedTarget == null) return;
+            try
+            {
+                if (!_active
+                    || !_degradedTarget.isActiveAndEnabled
+                    || _degradedTarget != CurrentItem()
+                    || Time.realtimeSinceStartup - _degradedUntil > 0f)
+                {
+                    ClearDegradedConfirm();
+                }
+            }
+            catch { ClearDegradedConfirm(); }
+        }
+
         private static void Activate(Selectable s)
         {
             if (s == null) { ExitInternal(false); return; }
 
             // 留痕：崩溃排查用。原生崩溃不会在日志里留下任何异常，
             // 只有我们自己事前写下的这一行能指明最后碰的是哪个控件。
+            // 类型用 ControlTypeName（真实组件类型），不能用 GetType().Name
+            // （IL2CPP 代理只会给出声明类型 Selectable，等于没信息）。
             try
             {
-                A11yHost.Log.LogInfo("[UiNav] 激活 " + s.GetType().Name + "「" + TextOf(s) + "」场景 "
+                LabelResult lr = ResolveLabel(s);
+                A11yHost.Log.LogInfo("[UiNav] 激活 " + ControlTypeName(s) + "「" + LabelText(s, lr) + "」场景 "
                     + SceneManager.GetActiveScene().name);
+                Diag("激活原始对象：路径=" + PathOf(s.transform)
+                     + " 来源=" + lr.Source + " 质量=" + lr.Quality);
             }
             catch { }
 
             if (!s.interactable)
             {
-                Repeat.Say("该项当前不可用。", true);
+                Repeat.Say(LabelText(s, ResolveLabel(s)) + "，该项当前不可用。", true);
                 return;
             }
 
             try
             {
-                TMP_InputField inf = s as TMP_InputField;
+                // IL2CPP：必须 GetComponent<T>()，不能 `s as T`（恒 null）。
+                TMP_InputField inf = s.GetComponent<TMP_InputField>();
                 if (inf != null)
                 {
                     // 先退出导航（ReleaseSelection 会清掉上一个高亮），
@@ -1358,11 +2013,13 @@ namespace MeiKongA11y
                     ExitInternal(false);
                     SelectByUs(inf.gameObject);
                     inf.ActivateInputField();
-                    Repeat.Say("已进入输入框，直接打字即可。按 Tab 返回导航。", true);
+                    // 开关键是可配的（逐作 CfgNavKey，默认 Ctrl+Alt+G / 备用 Tab），
+                    // 平台层不知道具体键位，只能说「导航开关」。
+                    Repeat.Say("已进入输入框，直接打字即可。再次按导航开关返回导航。", true);
                     return;
                 }
 
-                Toggle t = s as Toggle;
+                Toggle t = s.GetComponent<Toggle>();
                 if (t != null)
                 {
                     t.isOn = !t.isOn;
@@ -1371,17 +2028,17 @@ namespace MeiKongA11y
                     return;
                 }
 
-                Slider sl = s as Slider;
+                Slider sl = s.GetComponent<Slider>();
                 if (sl != null)
                 {
                     Repeat.Say("滑条请用左右方向键调整。", true);
                     return;
                 }
 
-                Button b = s as Button;
+                Button b = s.GetComponent<Button>();
                 if (b != null)
                 {
-                    string label = TextOf(s);
+                    string label = LabelText(s, ResolveLabel(s));
                     Repeat.Say("已激活 " + label, false);
                     _inOurActivation = true;
                     try { b.onClick.Invoke(); }
@@ -1433,7 +2090,12 @@ namespace MeiKongA11y
         private static void Adjust(float dir)
         {
             if (Items.Count == 0) return;
-            Slider sl = Items[_index] as Slider;
+            // 方向键是「别的键」：按了就说明玩家不再确认刚才那一项，清掉降级确认。
+            ClearDegradedConfirm();
+            // IL2CPP：`Items[_index] as Slider` 恒 null → 左右方向键永远调不了滑条。
+            // 用 GetComponent<Slider>()（见文件头「IL2CPP 纪律」）。
+            Slider sl = _index >= 0 && _index < Items.Count && Items[_index] != null
+                        ? Items[_index].GetComponent<Slider>() : null;
             if (sl == null) return;
             try
             {
@@ -1446,7 +2108,11 @@ namespace MeiKongA11y
         }
 
         // ================= 每帧 =================
-
+        //
+        // ⚠ 遗留入口：这就是「导航模式」的每帧驱动（Tab 开关 + 扫屏 + 自维护游标 + 接管 submit）。
+        //   新作默认**不调用**它（见文件头警告与 docs/交互形态判定.md 的 A/B/C 判定）：
+        //   A 类连这个调用都不该有；B / C 类应把实现放到游戏自己的输入 / 焦点层。
+        //   下面一行代码/逻辑属于 0.2.x 遗留行为，改它就是改老作，禁止。
         public static void Update()
         {
             // ---- 场景切换防护：必须放在最前面 ----
@@ -1463,6 +2129,10 @@ namespace MeiKongA11y
                 }
             }
             catch { }
+
+            // 降级确认的兜底清理：目标失效 / 换项 / 退出导航 / 窗口超时都在这里收口。
+            // 放在场景切换之后、重扫之前 —— 每帧都跑一次，但不做任何扫描。
+            ValidateDegradedConfirm();
 
             // ---- 激活后的下一帧重扫（唯一允许的自动扫描）----
             bool rescanDue =
@@ -1495,9 +2165,31 @@ namespace MeiKongA11y
                 }
             }
 
-            if (KeyEdge.Pressed(KeyCode.Tab)) { Diag("Tab 检测到 active=" + _active + " frame=" + Time.frameCount); Toggle(); return; }
+            // ---- 导航开关：优先问逐作钩子，钩子没填时保持原来的 Tab ----
+            //
+            // 为什么开关由逐作决定（0.2.2）：本作要求导航快捷键是组合键（默认
+            // Ctrl+Alt+G），且不能和游戏自己的 HotkeyService 撞键。组合键解析
+            // （Hotkey.cs 语义：写了哪个修饰键就要求哪个、必须有主键）、边沿闩锁、
+            // 输入框聚焦时不抢键 —— 这些都属于逐作热键系统。平台层只收一个
+            // 「这一帧要不要切换导航模式」的布尔值（A11yHost.NavTogglePressed）。
+            //
+            // 钩子留空 = 前三作行为逐字节不变（Tab）。平台层自己读 Tab 时走
+            // KeyEdge.Pressed，内部已 try/catch，不会把 Input 异常抛进主循环。
+            bool navToggle;
+            try
+            {
+                Func<bool> navHook = A11yHost.NavTogglePressed;
+                navToggle = navHook != null ? navHook() : KeyEdge.Pressed(KeyCode.Tab);
+            }
+            catch (Exception e)
+            {
+                // 逐作钩子抛异常不能把平台主循环带走（与 KeyEdge / Hotkey 同一条纪律）。
+                Diag("NavTogglePressed 抛异常，本帧按未按下处理：" + e.Message);
+                navToggle = false;
+            }
+            if (navToggle) { Diag("导航开关 检测到 active=" + _active + " frame=" + Time.frameCount); Toggle(); return; }
 
-            // 游戏**自己**换面板时（例如姓名输入按回车 →「确定要使用这个姓名吗」
+            // 游戏**自己**换面板时（例如姓名输入按回车 →「<确认文案>」
             // 确认框：promptUI 与 confirmationUI 直接 SetActive 互换）不会通知我们，
             // 列表会一直停在旧控件上，新面板的按钮就「定位不到」。
             // 当前项一旦失效就重扫一次；每个失效对象只请求一次，避免反复重扫。
@@ -1538,7 +2230,63 @@ namespace MeiKongA11y
                         ArmQuitConfirm(target);
                         return;
                     }
+
+                    // 退出确认**优先**：已经武装过退出确认的这一下就是要真退出，
+                    // 不再叠降级确认（否则退出要按三次回车，而且容易误以为没生效）。
+                    bool quitArmed = QuitConfirmArmed(target);
                     ClearQuitConfirm();
+
+                    // === 0.2.4【阻断级】未命名控件默认不激活 ===
+                    //
+                    // 用户原话：「中途没有降级行为就执行了这个操作」。占位按钮常常
+                    // 还能捡到一段占位文字（quality=Bound），旧实现只对 Semantic/Raw
+                    // 做二次确认，于是第一次回车就直接点了。
+                    // 现在：标签只能落到「未命名<类型>，第 N 项」时 ——
+                    //   · CfgUnknownConfirm 开（默认）→ 第一次只念「已阻止操作 + 再按一次确认」，
+                    //     第二次才放行（复用降级确认状态机，不新增配置）；
+                    //   · CfgUnknownConfirm 关 → 硬阻止，永不激活。
+                    // 退出确认已武装时不叠这一层（否则退出要按三次回车）。
+                    if (!quitArmed)
+                    {
+                        if (IsUnnamedLabel(target))
+                        {
+                            if (!UnknownConfirmEnabled())
+                            {
+                                Diag("未命名控件已阻止激活（CfgUnknownConfirm=false）：路径="
+                                     + PathOf(target.transform));
+                                Repeat.Say("未命名控件，已阻止操作。", true);
+                                return;
+                            }
+                            if (!DegradedConfirmArmed(target))
+                            {
+                                Diag("未命名控件待复核：路径=" + PathOf(target.transform));
+                                ArmDegradedConfirm(target);
+                                return;
+                            }
+                            ClearDegradedConfirm();   // 第二次按下：放行
+                        }
+                        else if (NeedsDegradedConfirm(target))
+                        {
+                            // 降级确认：标签是推断出来的（Raw）时，第一次只重复
+                            // 朗读 + 提示再按一次，第二次才真正执行。
+                            // 必须放在 Activate 之前 —— 旧实现的问题就是「没有任何
+                            // 降级行为就执行激活」。
+                            if (!DegradedConfirmArmed(target))
+                            {
+                                ArmDegradedConfirm(target);
+                                return;
+                            }
+                            ClearDegradedConfirm();   // 第二次按下：放行
+                        }
+                        else
+                        {
+                            ClearDegradedConfirm();
+                        }
+                    }
+                    else
+                    {
+                        ClearDegradedConfirm();
+                    }
 
                     Activate(target);
 

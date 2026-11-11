@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 using ShiMeng.Minigames.MemoryMatch;
@@ -65,6 +65,7 @@ namespace MeiKongA11y
         private static MemoryMatchSide _lastTurn;
         private static string _lastStateKey = "";
         private static float _nextPoll;
+        private static bool _endAnnounced;
 
         /// <summary>小游戏面板开着、而且牌已经铺好了，才算「在玩」。</summary>
         internal static bool IsActive()
@@ -81,6 +82,18 @@ namespace MeiKongA11y
             catch { return false; }
         }
 
+        /// <summary>
+        /// 真正「在打这一局」：面板开着，而且游戏自己的 Session 还在跑（`MemoryMatchGameController.IsGameRunning`）。
+        /// 打完一局之后 Session 就停了（`EndGameCoroutine` → `Session.End()`），但面板还开着 ——
+        /// 这时必须把方向键/回车交回焦点层，否则玩家摸不到面板上的关闭按钮。
+        /// </summary>
+        internal static bool IsPlaying()
+        {
+            if (!IsActive()) return false;
+            try { return _ctl != null && _ctl.IsGameRunning; }
+            catch { return false; }
+        }
+
         // ==================================================================
         // 每帧（小游戏期间由 Plugin 的 TickUiNav 调进来，UiNav 让位）
         // ==================================================================
@@ -92,15 +105,34 @@ namespace MeiKongA11y
                 _nextPoll = Time.realtimeSinceStartup + 0.25f;
 
                 RefreshCards();
-                if (_cards.Count == 0) { _announcedStart = false; return; }
+
+                // 面板关了 → 清状态，别把「局末」当成在面板里
+                if (!IsActive()) { _announcedStart = false; _endAnnounced = false; return; }
+
+                bool playing = IsPlaying();
+
+                // 局末：Session 停了但面板还开着。这里必须在「牌被 ResetToIdle 清空」之前判断，
+                // 否则 StopGame/打完最后一对之后 `_cards.Count == 0` 会先 return，结果永远不播。
+                if (!playing)
+                {
+                    if (_announcedStart && !_endAnnounced) { _endAnnounced = true; AnnounceGameEnd(); }
+                    HandleKeys();   // 只接 ESC；方向键/回车交给焦点层
+                    return;
+                }
+
+                // 新一局开始：清掉上一局的「结束」标记，重新报开始
+                if (_endAnnounced) { _endAnnounced = false; _announcedStart = false; }
+
+                if (_cards.Count == 0) return;
 
                 if (!_announcedStart)
                 {
                     _announcedStart = true;
                     _row = _col = 0;
-                    Announcer.Auto("记忆翻牌开始。" + _rows + " 行 " + _cols + " 列，共 " + _cards.Count + " 张牌。"
-                                   + "方向键移动，回车翻牌。现在在第 1 行第 1 列，"
-                                   + StateWord(CardAt(_row, _col)) + "。");
+                    // 开局只报棋盘大小和脚下这一张。怎么走、怎么翻（方向键/回车）是常识，不再念叨；
+                    // 按错会有「到头了」「没有可操作项」之类的即时反馈。
+                    Announcer.Auto("记忆翻牌，" + _rows + " 行 " + _cols + " 列共 " + _cards.Count
+                                    + " 张。现在第 1 行第 1 列，" + StateWord(CardAt(_row, _col)) + "。");
                     _lastTurn = Turn;
                     _lastPlayerScore = PlayerScore; _lastCpuScore = CpuScore;
                     return;
@@ -197,12 +229,42 @@ namespace MeiKongA11y
             }
         }
 
+        /// <summary>一局结束：报最终比分 + 输赢 + 怎么退出去（正常人抬眼就能看到比分牌）。</summary>
+        private static void AnnounceGameEnd()
+        {
+            try
+            {
+                int ps = PlayerScore, cs = CpuScore;
+                string result = "";
+                try
+                {
+                    var s = _ctl != null && _ctl.Flow != null ? _ctl.Flow.Session : null;
+                    if (s != null)
+                    {
+                        if (s.IsDraw) result = "平局。";
+                        else if (s.TryGetWinner(out var w))
+                            result = w == MemoryMatchSide.Player ? "你赢了。" : "诗萌赢了。";
+                    }
+                }
+                catch (Exception e) { A11yHost.Diag("[小游戏] 读胜负异常: " + e.Message); }
+                // 局末焦点会自动回到面板上的关闭按钮，所以只报比分和胜负，
+                // 不再教怎么关窗（方向键走过去 / 两次 Esc）。
+                Announcer.Auto("小游戏结束，哥哥 " + ps + " 分，诗萌 " + cs + " 分。" + result);
+                A11yHost.Diag("[小游戏] 局末播报：比分 " + ps + ":" + cs + " " + result);
+            }
+            catch (Exception e) { A11yHost.Diag("[小游戏] 局末播报异常: " + e.Message); }
+        }
+
         private static void HandleKeys()
         {
             // 返回键先问 —— 它一旦吃下这一帧的输入，后面的方向键/回车就不该再当回事。
             // （本作运行时没有 UIManager 实例，游戏自己不看 ESC，所以这里是唯一的裁决点；
             //   万一将来有了，UIManager 的前置钩子会先问，帧内去重保证只处理一次。）
             InterceptBackInput();
+
+            // 一局打完（Session 停了）之后，方向键/回车不能再被网格吃掉：
+            // 面板上的关闭按钮要靠焦点层走，否则玩家只能盲按两次 Esc
+            if (!IsPlaying()) return;
 
             int dx = 0, dy = 0;
             if (Input.GetKeyDown(KeyCode.LeftArrow)) dx = -1;
@@ -238,7 +300,7 @@ namespace MeiKongA11y
                 var state = BoardState(idx);
                 if (state != MemoryMatchCardState.FaceDown)
                 {
-                    Repeat.Say(state == MemoryMatchCardState.Matched ? "这张已经配对过了。" : "这张已经翻开了。", true);
+                    Repeat.Say(state == MemoryMatchCardState.Matched ? "这张已经配对过了，用方向键换一张。" : "这张已经翻开了，用方向键换一张翻第二张。", true);
                     return;
                 }
                 if (_ctl != null) _ctl.OnCardClicked(idx);

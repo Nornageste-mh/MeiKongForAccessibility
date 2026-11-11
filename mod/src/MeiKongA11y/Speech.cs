@@ -35,13 +35,15 @@ namespace MeiKongA11y
     ///                       判据是 GetSpeakState() ∈ {3,4}，**不是** Speak 的返回值。
     ///   4. SAPI          —— Windows 内置语音，无需任何读屏软件。
     ///
-    /// 之所以自带 NVDA / 争渡 / SAPI 三级而不强依赖 Tolk：Tolk 官方不提供预编译
-    /// 二进制，只有 MSVC 工程；而在只装了 NVDA 的机器上，JAWS / SuperNova /
+    /// 之所以自带 NVDA / 争渡 / SAPI 三级而不强依赖 Tolk：Tolk 上游确有 CI 构建的
+    /// tolk.zip，但只有 master 分支、没有版本 tag（且 Tolk 是 LGPL-3.0，随包须附
+    /// 许可全文与来源）；而在只装了 NVDA 的机器上，JAWS / SuperNova /
     /// ZoomText 等分支根本无法验证。与其塞一份没测过的互操作代码，不如让
     /// 每一级都可独立工作，Tolk 作为「有则更好」的增强。
     ///
     /// 把 Tolk.dll 及 Tolk 的依赖 DLL（nvdaControllerClient64.dll、SAAPI64.dll）
-    /// 放进 BepInEx\plugins\ 即可自动启用。
+    /// 放进 BepInEx\plugins\ 即可自动启用。**Tolk 是 LGPL-3.0**：随包分发时必须
+    /// 附许可证全文、来源与修改说明（见 NOTICE.md 第 5 节）。
     ///
     /// 争渡这一级**不需要用户放任何文件**：按官方建议直接从争渡安装目录加载
     /// ZDSRAPI（32/64 位各一个文件名，按进程位数选），那份还会跟着读屏一起升级。

@@ -135,5 +135,17 @@ namespace MeiKongA11y
             }
             return 0;
         }
+
+        /// <summary>功能菜单用：1–9 与 0（0 返回 10，当「下一页」）。</summary>
+        internal static int ReadMenuDigit()
+        {
+            for (int i = 1; i <= 9; i++)
+            {
+                if (Input.GetKeyDown(KeyCode.Alpha0 + i)) return i;
+                if (Input.GetKeyDown(KeyCode.Keypad0 + i)) return i;
+            }
+            if (Input.GetKeyDown(KeyCode.Alpha0) || Input.GetKeyDown(KeyCode.Keypad0)) return 10;
+            return 0;
+        }
     }
 }

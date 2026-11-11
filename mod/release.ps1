@@ -2,7 +2,8 @@
     打发布 zip。
 
     用法：
-        cd D:\DSHWorkBase\belfry_a11y\mod
+        cd <本仓库>\mod
+
         .\build.ps1
         .\release.ps1
 
@@ -20,7 +21,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$GameDir = "F:\Steam\steamapps\common\妹控计划"
+    [string]$GameDir = ""   # 留空则交给 build.ps1 自己从 Steam 库目录找
 )
 
 $ErrorActionPreference = "Stop"
@@ -97,6 +98,18 @@ Ok $zip
 Ok ("{0} MB, {1} 个条目" -f [Math]::Round((Get-Item -LiteralPath $zip).Length / 1MB, 1), $total)
 if ($badN -gt 0) {
     Write-Host "    $badN 个条目用了反斜杠分隔符" -ForegroundColor Red
+    exit 1
+}
+# 发行包逐项自检（流水线 P6 十二项）：任何一项失败都 exit 1，不许警告后继续
+Step "3.5/4  发行包逐项自检"
+$checkScript = Join-Path (Split-Path -Parent $PSScriptRoot) "tools\package_check.ps1"
+if (-not (Test-Path -LiteralPath $checkScript)) {
+    Write-Host "    找不到 tools\package_check.ps1" -ForegroundColor Red
+    exit 1
+}
+& pwsh -NoProfile -File $checkScript -PackageDir (Join-Path $PSScriptRoot "package")
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "    发行包自检未通过，停止发布" -ForegroundColor Red
     exit 1
 }
 

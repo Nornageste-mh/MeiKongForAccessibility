@@ -23,6 +23,11 @@
     脚本整个跑不起来。而不少编辑器/工具保存 UTF-8 时不写 BOM ——
     mod/build.ps1 就这样坏过一次。所以在这里挡住。
 
+    背景四（0.2.7.0 起，第 0 条纪律）：逐作仓不允许把「导航模式」当默认形态
+    提交。这里机械检查三件事：判定文件存在且结论已填 A/B/C；Plugin 的
+    CfgMenuNav 默认 false；README / 安装说明 / FAQ 不把 Tab 导航模式写成默认键。
+    框架仓库本身没有 mod\src\，自动跳过这组检查。
+
     用法：
         .\tools\check-staged.ps1          # 检查
         git commit ...                    # 通过后再提交
@@ -89,6 +94,51 @@ try {
         if (-not $hasBom) { $noBom += $f }
     }
 
+    # ================================================================
+    # 第 0 条纪律（0.2.7.0）：逐作仓的默认交互形态守卫。
+    # 框架仓库没有 mod\src\，跳过；生成出来的逐作仓必须有判定文件且默认干净。
+    # ================================================================
+    $interaction = @()
+    if (Test-Path (Join-Path $root 'mod\src')) {
+        $judge = Join-Path $root 'docs\交互形态判定.md'
+        if (-not (Test-Path -LiteralPath $judge)) {
+            $interaction += '缺少 docs\交互形态判定.md（P0 必填；模板见 docs\templates\交互形态判定.md）'
+        } else {
+            $jt = Get-Content -LiteralPath $judge -Raw -Encoding UTF8
+            if ($jt -notmatch '\*\*结论\*\*：\s*[ABC]') {
+                $interaction += 'docs\交互形态判定.md 的「**结论**：」未填 A/B/C —— 未判定不许合并'
+            }
+        }
+
+        # CfgMenuNav 必须是默认 false；A 类作品整组删掉也可以，但只要还留着这项，
+        # 默认值就不能是 true。
+        $plugins = @(Get-ChildItem -Path (Join-Path $root 'mod\src') -Recurse -Filter 'Plugin.cs' -File -ErrorAction SilentlyContinue)
+        foreach ($p in $plugins) {
+            $pt = Get-Content -LiteralPath $p.FullName -Raw -Encoding UTF8
+            $hasNavEntry = ($pt -match 'CfgMenuNav|菜单键盘导航')
+            $navOff = ($pt -match '"菜单键盘导航（遗留）"\s*,\s*false')
+            if ($hasNavEntry -and -not $navOff) {
+                $interaction += 'Plugin.cs 的 CfgMenuNav 不是默认 false（第 0 条纪律：新作默认不得启用导航模式；A 类可整组删掉）'
+            }
+        }
+
+        # README / 安装说明 / FAQ 不得把 Tab 导航模式写成默认快捷键。
+        # 允许「遗留 / 不提供 / 不得 / 历史」这类说明句 —— 卡的只是默认口径。
+        foreach ($rel in @('README.md', 'mod\package\安装说明.md', 'mod\package\常见问题.md')) {
+            $abs = Join-Path $root $rel
+            if (-not (Test-Path -LiteralPath $abs)) { continue }
+            $lines = @(Get-Content -LiteralPath $abs -Encoding UTF8)
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                $line = $lines[$i]
+                if ($line -match 'Tab' -and $line -match '导航模式' -and
+                    $line -match '进入|退出' -and
+                    $line -notmatch '遗留|不提供|不得|历史|老作') {
+                    $interaction += "${rel}:$($i + 1) 仍把「Tab 进入/退出导航模式」当默认快捷键"
+                }
+            }
+        }
+    }
+
     Write-Host "暂存文件数: $($staged.Count)" -ForegroundColor Gray
     if ($violations.Count -gt 0) {
         Write-Host "`n禁止提交以下内容：" -ForegroundColor Red
@@ -116,6 +166,17 @@ try {
         exit 1
     }
 
+    if ($interaction.Count -gt 0) {
+        Write-Host "`n第 0 条纪律（交互形态）检查未通过：" -ForegroundColor Red
+        $interaction | Sort-Object -Unique | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+        Write-Host "`n补丁要像游戏本身就有无障碍，不是像外挂。" -ForegroundColor Red
+        Write-Host "先填 docs\交互形态判定.md，再把默认形态改成游戏自己的键盘路径。" -ForegroundColor Red
+        exit 1
+    }
+
     Write-Host "通过：没有版权内容、没有二进制、没有脚手架文件，.ps1 的 BOM 也都在。" -ForegroundColor Green
+    if (Test-Path (Join-Path $root 'mod\src')) {
+        Write-Host "第 0 条纪律：判定文件已填、默认未启用导航模式、文档无补丁专属模式键。" -ForegroundColor Green
+    }
     exit 0
 } finally { Pop-Location }

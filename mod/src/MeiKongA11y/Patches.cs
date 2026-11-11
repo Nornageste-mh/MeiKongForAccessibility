@@ -1,6 +1,8 @@
 using System;
 using HarmonyLib;
 using ShiMeng.DialogueV2;
+using UnityEngine;
+using UnityEngine.EventSystems;
 
 namespace MeiKongA11y
 {
@@ -23,7 +25,7 @@ namespace MeiKongA11y
             [HarmonyPostfix]
             private static void Post(DialogueLine line, int listPosition)
             {
-                try { Reader.OnLine(line); } catch (Exception e) { A11yHost.Diag("[挂钩] LineChanged 异常: " + e.Message); }
+                try { Reader.OnLine(line); Focus.OnStoryLine(); } catch (Exception e) { A11yHost.Diag("[挂钩] LineChanged 异常: " + e.Message); }
             }
         }
 
@@ -44,7 +46,8 @@ namespace MeiKongA11y
             [HarmonyPostfix]
             private static void Post(string scenarioId)
             {
-                try { Choices.Clear(); } catch { }
+                try { Reader.OnScenarioEnded(scenarioId); Choices.Clear(); }
+                catch { }
             }
         }
 
@@ -157,6 +160,181 @@ namespace MeiKongA11y
             {
                 try { return !Minigame.InterceptBackInput(); }
                 catch (Exception e) { A11yHost.Diag("[挂钩] 返回键拦截异常: " + e.Message); return true; }
+            }
+        }
+
+        // ==============================================================
+        // 以下补丁点是 0.2.7.2「导航模式 → 游戏自己的输入/焦点层」迁移的核心。
+        //
+        // 全部只做两件事：①在游戏自己「面板打开/关闭」的那一刻交出/收回焦点；
+        // ②在游戏自己的提交/推进通路上让开一帧，避免一次按键被处理两遍。
+        // 没有一个补丁自己维护控件列表、顺序或索引（那正是旧 UiNav 的 X2/G62 违规点）。
+        // ==============================================================
+
+        /// <summary>
+        /// 桌宠面板打开（<c>PetPanelRegistry.OpenPanel(string)</c>，15 个面板的唯一入口）。
+        /// 用游戏自己的 <c>TryGetPanelRoot</c> 拿面板根 —— 不扫屏、不猜对象名。
+        /// </summary>
+        [HarmonyPatch(typeof(PetPanelRegistry), nameof(PetPanelRegistry.OpenPanel))]
+        internal static class PetPanelOpened
+        {
+            [HarmonyPostfix]
+            private static void Post(PetPanelRegistry __instance, string panelId)
+            {
+                try
+                {
+                    GameObject root;
+                    if (!__instance.TryGetPanelRoot(panelId, out root) || root == null) return;
+                    Focus.Enter(root.transform, "", Focus.Kind.PetPanel, panelId);  // 标题交给 PanelMap（游戏自己画在界面上的名字）
+                }
+                catch (Exception e) { A11yHost.Diag("[挂钩] OpenPanel 异常: " + e.Message); }
+            }
+        }
+
+        /// <summary>
+        /// 绕过 <c>OpenPanel</c> 直接走 <c>PresentOpen</c> 的入口（例如「语音收藏」：
+        /// <c>PetUiIntegrationHub.OpenVoiceCollect</c> 只调 <c>PanelRegistry.PresentOpen(root)</c>）。
+        /// 面板 id 用根节点的对象名反查（PanelMap.KeyOf）。
+        /// </summary>
+        [HarmonyPatch(typeof(PetPanelRegistry), nameof(PetPanelRegistry.PresentOpen))]
+        internal static class PetPanelPresented
+        {
+            [HarmonyPostfix]
+            private static void Post(GameObject panelRoot)
+            {
+                try
+                {
+                    if (panelRoot == null) return;
+                    string key = PanelMap.KeyOf(panelRoot.name);
+                    if (string.IsNullOrEmpty(key)) return;
+                    Focus.Enter(panelRoot.transform, "", Focus.Kind.PetPanel, key);
+                }
+                catch (Exception e) { A11yHost.Diag("[挂钩] PresentOpen 异常: " + e.Message); }
+            }
+        }
+
+        /// <summary>对应的「直接隐藏」入口（语音收藏走 <c>HideVoiceCollectInstant</c> → <c>PresentClose</c>）。</summary>
+        [HarmonyPatch(typeof(PetPanelRegistry), nameof(PetPanelRegistry.PresentClose))]
+        internal static class PetPanelPresentedClosed
+        {
+            [HarmonyPostfix]
+            private static void Post(GameObject panelRoot)
+            {
+                try
+                {
+                    if (panelRoot == null || !Focus.IsPanelActive) return;
+                    string key = PanelMap.KeyOf(panelRoot.name);
+                    if (string.IsNullOrEmpty(key)) return;
+                    if (string.Equals(Focus.DomainId, key, StringComparison.OrdinalIgnoreCase)) Focus.Leave();
+                }
+                catch (Exception e) { A11yHost.Diag("[挂钩] PresentClose 异常: " + e.Message); }
+            }
+        }
+
+        /// <summary>桌宠面板关闭：焦点交还，并清掉选中项（否则关面板后回车会点到一个看不见的按钮）。</summary>
+        [HarmonyPatch(typeof(PetPanelRegistry), nameof(PetPanelRegistry.ClosePanel))]
+        internal static class PetPanelClosed
+        {
+            [HarmonyPostfix]
+            private static void Post(string panelId)
+            {
+                try
+                {
+                    if (Focus.Domain == Focus.Kind.PetPanel
+                        && string.Equals(Focus.DomainId, panelId, StringComparison.OrdinalIgnoreCase))
+                        Focus.Leave();
+                }
+                catch (Exception e) { A11yHost.Diag("[挂钩] ClosePanel 异常: " + e.Message); }
+            }
+        }
+
+        /// <summary>
+        /// 对话内面板打开（<c>UIManager.OpenUI(GameObject, List&lt;GameObject&gt;)</c>，14 个面板的唯一入口）。
+        /// OpenUI 只是把操作入队，真正的淡入在协程里 —— 所以这里立刻建域，
+        /// 首焦点由 Focus 在面板淡入完成后自动补（CanvasGroup.alpha 未满时设焦点会被 uGUI 吞掉）。
+        /// </summary>
+        [HarmonyPatch(typeof(UIManager), nameof(UIManager.OpenUI))]
+        internal static class UiPanelOpened
+        {
+            [HarmonyPostfix]
+            private static void Post(GameObject uiPanel)
+            {
+                try
+                {
+                    if (uiPanel == null) return;
+                    Focus.Enter(uiPanel.transform, "", Focus.Kind.UiManager, "");
+                }
+                catch (Exception e) { A11yHost.Diag("[挂钩] OpenUI 异常: " + e.Message); }
+            }
+        }
+
+        /// <summary>
+        /// 返回（<c>UIManager.CloseOrGoBack()</c>，游戏自己的「关面板/后退」唯一入口）。
+        /// 出栈在协程里做，所以只标记「等它关完，焦点回栈顶」—— 栈本身是游戏的 uiStack，我们只读。
+        /// </summary>
+        [HarmonyPatch(typeof(UIManager), nameof(UIManager.CloseOrGoBack))]
+        internal static class UiPanelClosed
+        {
+            [HarmonyPostfix]
+            private static void Post()
+            {
+                try
+                {
+                    if (Focus.Domain == Focus.Kind.UiManager) Focus.LeaveWithRestore(1.2f);
+                }
+                catch (Exception e) { A11yHost.Diag("[挂钩] CloseOrGoBack 异常: " + e.Message); }
+            }
+        }
+
+        /// <summary>
+        /// uGUI 自己的提交通路：焦点归我们管的时候让开，避免「我们提交一次 + 模块再提交一次」。
+        /// 未装补丁时选中项恒为 null（游戏全代码零处 SetSelectedGameObject），这个调用本来就 no-op；
+        /// 装了之后只在域内接管，域外一行都不改。
+        /// </summary>
+        [HarmonyPatch(typeof(StandaloneInputModule), "SendSubmitEventToSelectedObject")]
+        internal static class MuteUnitySubmit
+        {
+            [HarmonyPrefix]
+            private static bool Pre() { return !Focus.Active; }
+        }
+
+        [HarmonyPatch(typeof(StandaloneInputModule), "SendMoveEventToSelectedObject")]
+        internal static class MuteUnityMove
+        {
+            [HarmonyPrefix]
+            private static bool Pre() { return !Focus.Active; }
+        }
+
+        /// <summary>
+        /// **推进剧情的唯一入口**：<c>DialogueSceneManager.DialogueButtonClicked()</c>
+        /// （鼠标点对话框 → 同一个方法；键盘 Space/回车/滚轮 → `:319` 也调它）。
+        ///
+        /// 为什么要在面板开着时拦它：游戏的键盘推进门控是
+        /// <c>!IsSpecialModeActive()</c>，而 `IsSpecialModeActive()` 经 `isUIActive()` 只认
+        /// mainUI / historyUI / galleryUI / optionsUI / jumpBPPanel / collectVoiceUI 六个面板。
+        /// 存档、读档、音乐、手机历史等面板**不在**其中 —— 不拦的话，读屏玩家在存档面板里
+        /// 按空格选槽位，会同时把背后的剧情推进一句。
+        ///
+        /// 只跳过这一个方法，且**只在面板焦点域存在时**跳过；域外（含主界面浏览域）行为与不装补丁完全一致。
+        /// </summary>
+        [HarmonyPatch(typeof(DialogueSceneManager), nameof(DialogueSceneManager.DialogueButtonClicked))]
+        internal static class DialogueAdvanceGate
+        {
+            [HarmonyPrefix]
+            private static bool Pre()
+            {
+                try
+                {
+                    // 只拦「面板开着」的情形；主界面浏览（Kind.Scene）不拦 —— 那时回车是去点图标，
+                    // 而剧情推进归 KeyEdge 之外的 game 键处理，玩家按空格应当照常推进。
+                    if (!Focus.IsPanelActive) return true;
+                    // 剧情正在播时不能拦：tool 剧情（日程完成、番茄钟启动…）会在面板不关的情况下播，
+                    // 玩家按空格/回车是要continue剧情，拦下来就成了「按了没反应」。
+                    if (Reader.InStory) return true;
+                    A11yHost.Diag("[挂钩] 面板焦点期间拦下剧情推进");
+                    return false;
+                }
+                catch { return true; }
             }
         }
     }

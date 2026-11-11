@@ -75,17 +75,28 @@ namespace MeiKongA11y
         }
 
         /// <summary>
-        /// 临时优先项（选项列表这类）：**进缓冲区、且在重读时优先于台词**（不播报）。
+        /// 临时优先项（选项列表这类）：**进缓冲区并播报，且在重读时优先于台词**。
         /// **必须与 <see cref="Drop"/> 成对出现。**
+        ///
+        /// === 冻结语义（升级时必读，0.2.5 补注） ===
+        ///
+        /// 本方法是 **「入缓冲区 + 自己播报」**（interrupt 默认 true）。
+        /// 只记不念的场合请用 <see cref="Note"/>；想让调用方自己决定怎么念，
+        /// 不要改这里的语义 —— 那是**平台层的 ABI**。
+        ///
+        /// 第 7 作《妹控计划》的本地副本里 `Push(text, tag)` **不播报**
+        /// （注释写「播报由调用方决定」，其 Reader.SetChoices → Push 之后由
+        /// Choices.Ready 再播一次）——两版语义相反。逐作升级平台层时若直接
+        /// 整份替换 Repeat.cs，选项会**念两遍**；必须先核对所有 Push 调用点，
+        /// 见流水线 §6.5 第 4 步与 G33。
         /// </summary>
-        internal static void Push(string text, string tag)
+        internal static void Push(string text, string tag, bool interrupt = true)
         {
             if (string.IsNullOrEmpty(text)) return;
             _priority = text;
             _priorityTag = tag ?? "";
             Note(text);
-            // **不播报** —— 播报由调用方决定（要走播报队列 / 要等配音放完，
-            // 这些是逐作的策略，缓冲区不该替它决定）。
+            Speech.Speak(text, interrupt);
         }
 
         /// <summary>

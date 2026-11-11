@@ -42,6 +42,10 @@ namespace MeiKongA11y
         {
             "New Text", "Button", "Text", "Label", "Item", "Slider", "Toggle",
             "音效名称", "000", "00", "0",
+            // Unity 自带的输入框占位文字（不是玩家可见的游戏文案）
+            "Enter text...", "Enter text…", "Text (TMP)",
+            // 今天吃啥面板里画在菜品图上的占位字（玩家看到的是一张图，不是这道菜的名字）
+            "图片占位",
         };
 
         internal static bool GameTextIsNoise(string s)

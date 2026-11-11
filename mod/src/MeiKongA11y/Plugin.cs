@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using BepInEx;
@@ -27,7 +27,7 @@ namespace MeiKongA11y
     ///   · 只有一个场景、旧对话系统是不可达死代码 → 只挂 ShiMeng.DialogueV2 一套。
     ///   · 交互是主战场 → 面板感知 + 功能菜单 + 状态播报（Surfaces.cs）。
     /// </summary>
-    [BepInPlugin(Guid, "妹控计划 A11y Reader", "0.1.0.5")]
+    [BepInPlugin(Guid, "妹控计划 A11y Reader", "0.2.0.0")]
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "meikong.a11y.reader";
@@ -52,6 +52,8 @@ namespace MeiKongA11y
         internal static ConfigEntry<bool>   CfgQuitConfirm;
         internal static ConfigEntry<string> CfgQuitNames;
         internal static ConfigEntry<string> CfgExcludeNames;
+        internal static ConfigEntry<bool>   CfgSpeakRawName;     // 0.2.2 新契约：念对象名/类型名（默认关）
+        internal static ConfigEntry<bool>   CfgUnknownConfirm;   // 0.2.2 新契约：推断标签激活前二次确认（默认开）
 
         // ---- 交互 ----
         internal static ConfigEntry<string> CfgMenuKey;          // 功能菜单
@@ -70,7 +72,6 @@ namespace MeiKongA11y
         internal static ConfigEntry<bool>   CfgDiagLog;
 
         private Harmony _harmony;
-        private float _nextSendNavCheck;
 
         private void Awake()
         {
@@ -108,27 +109,40 @@ namespace MeiKongA11y
                 "自动 / Tolk / NVDA / 争渡 / SAPI。默认按 Tolk → NVDA → 争渡 → SAPI 挑第一个可用的；\n" +
                 "钉死某个后端且它不可用时**不会回退**（这是刻意的，用于排查）。");
 
-            CfgMenuNav = Config.Bind("界面导航", "菜单键盘导航", true,
-                "Tab 进入 / 退出导航模式；上下选择，左右调滑条，回车激活。\n" +
-                "本作全屏 247 个控件里通常只有 18 个此刻可用，所以「只导航看得见的控件」建议保持开启。");
+            // 【遗留·仅 UiNav 使用】0.2.7.2 起本作界面操作改走游戏自己的入口（见 docs/交互形态判定.md），
+            // 不再需要「先按一个键进入导航模式」。这一项只为兼容老配置保留，默认关闭。
+            CfgMenuNav = Config.Bind("界面（遗留导航兼容）", "菜单键盘导航（遗留）", false,
+                "【遗留·仅 UiNav 使用】Tab 进入 / 退出导航模式；上下选择，左右调滑条，回车激活。\n" +
+                "0.2.7.2 起界面操作已改为直接走游戏自己的入口，**不需要**也不再推荐打开这一项。\n" +
+                "保留它只是为了让你还能临时回到旧的「扫屏 + 自维护焦点」形态做对照。");
 
-            CfgSortByPosition = Config.Bind("界面导航", "按屏幕位置排序控件", true,
+            CfgSortByPosition = Config.Bind("界面（遗留导航兼容）", "按屏幕位置排序控件", true,
                 "按控件在屏幕上的位置排序（先上后下、同一行先左后右），让「第几项」和画面对得上。");
 
-            CfgVisibleOnly = Config.Bind("界面导航", "只导航看得见的控件", true,
+            CfgVisibleOnly = Config.Bind("界面（遗留导航兼容）", "只导航看得见的控件", true,
                 "只收录画面上真的看得见、点得到的控件。本作有大量「active 但 alpha=0」的幽灵面板，\n" +
                 "关掉这一项会把没打开的面板里的控件也念出来。");
 
-            CfgQuitConfirm = Config.Bind("界面导航", "退出前二次确认", true,
+            CfgQuitConfirm = Config.Bind("界面（遗留导航兼容）", "退出前二次确认", true,
                 "在导航模式下激活下面列出的控件会先念一次确认，再按一次才真的执行；按方向键取消。");
 
-            CfgQuitNames = Config.Bind("界面导航", "退出确认对象名", "退出游戏,退出,Quit",
+            CfgQuitNames = Config.Bind("界面（遗留导航兼容）", "退出确认对象名", "退出游戏,退出,Quit",
                 "哪些控件需要二次确认，按 Unity 对象名**全等**匹配（不是正则）。多个用逗号分隔。");
 
-            CfgExcludeNames = Config.Bind("界面导航", "排除的对象名", "Scrollbar Horizontal,Scrollbar Vertical,Common_VScrollbar Variant",
+            CfgExcludeNames = Config.Bind("界面（遗留导航兼容）", "排除的对象名", "Scrollbar Horizontal,Scrollbar Vertical,Common_VScrollbar Variant",
                 "这些对象**及其整棵子树**里的控件不纳入导航（按祖先链匹配）。\n" +
                 "默认排除滚动条：本作用上下键选择、左右键调滑条，滚动条本身是噪音。\n" +
                 "名字来自 probe 的运行时场景树转储实查。");
+
+            CfgSpeakRawName = Config.Bind("界面（遗留导航兼容）", "朗读控件原始名字", false,
+                "【遗留·仅 UiNav 使用】控件没有可读文本时，退回念 Unity 对象名 / 类型名。\n" +
+                "默认关闭：对象名是开发者内部用语（「Button」「Image (3)」），对玩家没有意义（G72）。\n" +
+                "排查标签映射时临时打开即可。");
+
+            CfgUnknownConfirm = Config.Bind("界面（遗留导航兼容）", "标签不确定时二次确认", true,
+                "【遗留·仅 UiNav 使用】控件标签来自推断（不是游戏可见文本）时，第一次回车只念不点，\n" +
+                "再按一次才真的激活。本作有大量图标按钮（功能条、换装卡、通用关闭按钮）没有文字，\n" +
+                "这个二次确认就是防止「读到一个猜的名字，一按回车就点错了」。");
 
             CfgMenuKey = Config.Bind("交互", "功能菜单键", "F1",
                 "念出功能菜单（小游戏 / 番茄钟 / 日程表 / 设置 / 故事与收藏 / 换装）并编号，\n" +
@@ -197,6 +211,8 @@ namespace MeiKongA11y
             A11yHost.CfgExcludeNames   = CfgExcludeNames;
             A11yHost.CfgQuitConfirm    = CfgQuitConfirm;
             A11yHost.CfgQuitNames      = CfgQuitNames;
+            A11yHost.CfgSpeakRawName   = CfgSpeakRawName;
+            A11yHost.CfgUnknownConfirm = CfgUnknownConfirm;
 
             // 界面标签三钩子（本作新增；平台层逻辑不变，只是多问一句）
             A11yHost.GameTextIsNoise   = UiNav.GameTextIsNoise;
@@ -209,12 +225,13 @@ namespace MeiKongA11y
             A11yHost.TickUiNav = () =>
             {
                 // 记忆翻牌是 4×4 网格：方向键要在网格上走，线性遍历不适用，
-                // 所以小游戏开着的时候由 Minigame 接管方向键，UiNav 让位（选项与面板感知照常）。
+                // 所以小游戏开着的时候由 Minigame 接管方向键（选项与面板感知照常）。
                 if (Minigame.IsActive()) Minigame.Update();
-                else if (CfgMenuNav != null && CfgMenuNav.Value) UiNav.Update();
+                else if (CfgMenuNav != null && CfgMenuNav.Value) UiNav.Update();   // 遗留导航模式（默认关闭）
 
                 Choices.Update();
                 Surfaces.Tick();
+                Focus.Tick();       // 只做「面板刚开/刚关」的有界收敛，不做常驻扫屏
             };
             A11yHost.Validate();
 
@@ -227,7 +244,13 @@ namespace MeiKongA11y
             foreach (var t in new[] { typeof(Patches.LineChanged), typeof(Patches.ScenarioStarted),
                                       typeof(Patches.ScenarioEnded), typeof(Patches.ChoiceWaiting),
                                       typeof(Patches.ChoiceBind), typeof(Patches.ChoiceInteractable),
-                                      typeof(Patches.RunnerTestKey), typeof(Patches.GameBackInput) })
+                                      typeof(Patches.RunnerTestKey), typeof(Patches.GameBackInput),
+                                      // 0.2.0.0 界面操作：面板开/关事件、提交门、推进门
+                                      typeof(Patches.PetPanelOpened), typeof(Patches.PetPanelClosed),
+                typeof(Patches.PetPanelPresented), typeof(Patches.PetPanelPresentedClosed),
+                                      typeof(Patches.UiPanelOpened), typeof(Patches.UiPanelClosed),
+                                      typeof(Patches.MuteUnitySubmit), typeof(Patches.MuteUnityMove),
+                                      typeof(Patches.DialogueAdvanceGate) })
             {
                 try { _harmony.PatchAll(t); A11yHost.Diag("[补丁] " + t.Name + " OK"); }
                 catch (Exception e) { Logger.LogError("[补丁] " + t.Name + " 失败: " + e.Message); }
@@ -250,8 +273,12 @@ namespace MeiKongA11y
                 try { ready = Speech.Ready(); } catch { }
                 if (!ready) continue;
                 if (CfgStartupHint != null && CfgStartupHint.Value)
-                    Announcer.Auto("妹控计划无障碍补丁已加载。F1 功能菜单，F2 播报状态，F3 戳一下诗萌，"
-                                   + "F4 和她聊聊，F5 切回全屏，Tab 进入界面导航，退格键重读当前句。");
+                    // 只报「补丁在了 + 四个最常用的键」。F3 戳一下、F4 聊天、F5 回全屏、方向键/回车
+                    // 在界面里的含义都留给玩家自己探索（用户明确要求：文案不要替玩家解释玩法）；
+                    // 想了解的人看 package\安装说明.md。
+                    // 只留四个真正必要的键；「补丁已加载」这种话听起来像外挂，
+                // 换成游戏自己的口吻（用户 m04680：要像游戏本身就有无障碍）。
+                Announcer.Auto("无障碍已启用。F1 菜单，F2 状态，退格重读，F5 全屏。");
                 yield break;
             }
         }
@@ -260,23 +287,29 @@ namespace MeiKongA11y
         {
             try
             {
-                // uGUI 的 submit 通路：本作全代码零处 SetSelectedGameObject、运行时选中项恒为 null，
-                // 所以常驻关闭是安全的（P0 §4.3 E5）。但 VideoPanelManager 播完视频会把它置回 true，
-                // 所以这里周期性复位 —— 比 Patch 一个私有方法更耐游戏改版。
-                if (Time.realtimeSinceStartup >= _nextSendNavCheck)
-                {
-                    _nextSendNavCheck = Time.realtimeSinceStartup + 1f;
-                    var es = EventSystem.current;
-                    if (es != null && es.sendNavigationEvents) es.sendNavigationEvents = false;
-                }
-
-                // 每帧入口：导航 / 选项 / 面板感知 / 功能菜单
+                // 每帧入口：导航 / 选项 / 面板感知 / 焦点收敛
                 try { A11yHost.TickUiNav?.Invoke(); }
                 catch (Exception e) { A11yHost.Diag("[每帧] TickUiNav 异常: " + e.Message); }
+
+                // 界面键（0.2.7.2）：面板开着时方向键/回车/空格归焦点层处理，
+                // 走的是游戏自己的 Selectable 导航与 ISubmitHandler 通路。
+                // 记忆翻牌例外：那一套网格由 Minigame 自己接管（牌面要人工命名，
+                // 且 Enter 要走 OnCardClicked(int)），两套同时按键会念两遍。
+                if (!Minigame.IsActive() && !Surfaces.MenuVisible())
+                {
+                    try { Focus.HandleKeys(); }
+                    catch (Exception e) { A11yHost.Diag("[每帧] 界面键异常: " + e.Message); }
+                }
+
                 try { Announcer.Tick(); } catch { }
 
                 // 热键
-                if (KeyDown(CfgMenuKey)) Surfaces.OpenMenu();
+                // F1 是开关键：菜单开着时再按一次就关，不用记两个键。
+                if (KeyDown(CfgMenuKey))
+                {
+                    if (Surfaces.MenuVisible()) Surfaces.CloseMenu();
+                    else Surfaces.OpenMenu();
+                }
                 if (KeyDown(CfgStateKey)) Surfaces.ReportState();
                 if (KeyDown(CfgRepeatKey)) Reader.RepeatLast();
 
@@ -300,6 +333,23 @@ namespace MeiKongA11y
                 }
             }
             catch (Exception e) { A11yHost.Diag("[每帧] Update 异常: " + e.Message); }
+        }
+
+        /// <summary>
+        /// 收工：把补丁加过的东西全部撤掉（语音后端、Harmony 补丁、契约里的钩子引用）。
+        /// 0.2.7.2 模板要求 —— 纪律 §3「可摘除」不是卸载时才生效，运行期销毁也要走同一条路。
+        /// </summary>
+        private void OnDestroy()
+        {
+            Shutdown();
+        }
+
+        private void Shutdown()
+        {
+            try { Focus.Leave(); } catch { }
+            try { Speech.Shutdown(); } catch { }
+            try { if (_harmony != null) _harmony.UnpatchSelf(); } catch { }
+            try { A11yHost.Clear(); } catch { }
         }
 
         /// <summary>
