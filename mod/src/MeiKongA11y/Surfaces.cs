@@ -27,8 +27,9 @@ namespace MeiKongA11y
     ///
     /// 所以本层的三个动作是：
     ///   1) **面板变化播报**：谁被打开了、谁被关掉了，主动说一句；
-    ///   2) **功能菜单**（默认 F1）：把 6 个入口一次念完并编号，按数字直达 ——
-    ///      盲人不需要在控件树里翻；
+    ///   2) **主界面直达**（数字键 1–9 / 0）：不显示列表、没有模式开关，只在主界面空闲时
+    ///      把数字映射到功能条入口，是「快捷方式」而不是补丁自建菜单。
+    ///      （0.2.1.0 起按用户 m05215 的确认退役了 F1 菜单：一切控件都走方向键浏览 + 回车激活）
     ///   3) **状态播报**（默认 F2）：报当前面板、可操作项数量、番茄钟剩余时间等。
     ///
     /// 纪律：本层只**读**游戏状态、只**点游戏自己的按钮**（`Button.onClick.Invoke()`），
@@ -59,9 +60,6 @@ namespace MeiKongA11y
         private static FieldInfo _mapField;
 
         private static string _lastPanel = "";
-        private static float _menuUntil;
-        private static readonly List<string> _menuNames = new List<string>();
-        private static readonly List<string> _menuObjectNames = new List<string>();
 
         internal static void Tick()
         {
@@ -69,7 +67,6 @@ namespace MeiKongA11y
             {
                 Pet.WatchModeChange();
                 AnnouncePanelChange();
-                HandleMenuKeys();
             }
             catch (Exception e) { A11yHost.Diag("[交互] Tick 异常: " + e.Message); }
         }
@@ -232,9 +229,9 @@ namespace MeiKongA11y
         }
 
         // ==================================================================
-        // 2) 功能菜单（F1）：念完编号，按数字直达（每页 9 项，按 0 翻页）
+        // 2) 主界面直达 + 界面恢复（不再有补丁自建菜单）
         // ==================================================================
-        // ---- 界面隐藏/恢复（游戏侧是单向的，见 OpenMenu 里的注释） ----
+        // ---- 界面隐藏/恢复（游戏侧是单向的，见 EnsureUiVisible 里的注释） ----
         private static System.Type _hubType;
         private static System.Reflection.FieldInfo _chromeHiddenField;
         private static System.Reflection.MethodInfo _restoreUiMethod;
@@ -257,7 +254,7 @@ namespace MeiKongA11y
         }
 
         /// <summary>界面确实被游戏藏起来了吗（不是「面板没打开」那种空）。</summary>
-        private static bool ChromeHidden()
+        internal static bool ChromeHidden()
         {
             if (!EnsureHubRefs()) return false;
             try
@@ -284,168 +281,71 @@ namespace MeiKongA11y
             catch (Exception e) { A11yHost.Diag("[交互] 恢复界面失败: " + e.Message); return false; }
         }
 
-        private const int MenuPageSize = 9;
-        private static int _menuPage;
-        private static int _menuIndex;          // 菜单里光标所在项（0 起，跨页连续）
-        private static int _quitArmedIndex = -1;
-        private static float _quitArmedUntil;
-
-        internal static void OpenMenu()
+        /// <summary>
+        /// 界面被游戏自己的「隐藏界面」藏起来后是**单向**的：游戏的恢复入口只有
+        /// 「再按一次同一个按钮」和鼠标左键（`PetUiIntegrationHub.ToggleHideAllUiRoots` / `Update`），
+        /// 可那两个入口本身也被一起藏起来了 —— 键盘玩家按完就永久黑屏。
+        /// 所以任何补丁键按下时，都先试着调游戏自己的 `RestoreAllUiRoots()`。
+        ///
+        /// `quiet`：真正的播报交给调用方（F2 会把「界面已恢复显示。」并进自己的那句话里，
+        /// 免得两条播报互相打断）；这里只在无法恢复时说话。
+        /// </summary>
+        internal static bool EnsureUiVisible(bool quiet = false)
         {
-            _menuNames.Clear();
-            _menuObjectNames.Clear();
-            foreach (var e in BarEntries)
+            if (!ChromeHidden()) return false;
+            if (RestoreHiddenUi())
             {
-                if (FindBarButton(e[0]) == null) continue;
-                if (_menuObjectNames.Contains(e[0])) continue;
-                _menuObjectNames.Add(e[0]);
-                _menuNames.Add(e[1]);
-            }
-            if (_menuNames.Count == 0)
-            {
-                // 游戏把「隐藏界面」做成了单向的：再按一次同一个按钮才会恢复，可按钮自己也被藏了，
-                // 所以键盘玩家按完就再也找不到入口（游戏的恢复条件只有「再点一次」/左键，
-                // 见 PetUiIntegrationHub.ToggleHideAllUiRoots / Update）。F1 这时先替玩家把界面恢复。
-                if (RestoreHiddenUi())
+                // 恢复之后焦点域已经因为「域根被藏起来」退出了（Focus.Tick 的自愈）。
+                // 这里主动回到主界面，否则玩家恢复了画面、按方向键却没有任何反应。
+                try
                 {
-                    Repeat.Say("界面已恢复显示。按方向键可以浏览主界面。", true);
-                    return;
+                    if (!Focus.Active) Focus.EnterScene();
                 }
-                Repeat.Say("界面当前不可见，补丁没能自动恢复。请用鼠标左键点一下屏幕，或按 F5 切回全屏。", true);
-                return;
+                catch (Exception e) { A11yHost.Diag("[交互] 恢复后进入主界面失败: " + e.Message); }
+                return true;
             }
-            _menuPage = 0;
-            _menuIndex = 0;
-            _menuUntil = Time.realtimeSinceStartup + 12f;
-            AnnounceMenuCurrent(true);
+            if (!quiet)
+                Repeat.Say("界面当前不可见，补丁没能自动恢复。请用鼠标左键点一下屏幕，或按 F5 切回全屏。", true);
+            return false;
         }
 
         /// <summary>
-        /// 菜单当前项。第一项带总数，之后的移动只报「第 N 项：名字」——
-        /// 和游戏自己的列表一样：进列表先说清规模，走一步报一步。
-        /// 数字键仍然有效（老玩家习惯），但不再把「按数字键」念出来，
-        /// 那会让这个菜单听起来像补丁自己加的外挂面板（用户 m04680 的意见）。
+        /// 主界面按 1–9 / 0 直接打开功能条入口 —— 这是「快捷方式」，不是补丁自建的菜单：
+        /// 不显示列表、没有模式键、不改变方向键浏览那条主路径。
+        ///
+        /// 只在主界面空闲时接管（剧情里数字键归选项，面板开着时归焦点层）。
+        /// `0` = 系统设置（音量在这里调）；「隐藏界面」和「退出游戏」**不**映射到数字键 ——
+        /// 一个会单向黑屏、一个不可撤销，必须靠方向键浏览 + 二次确认才够安全。
         /// </summary>
-        private static void AnnounceMenuCurrent(bool withTotal)
+        internal static bool ActivateBarDigit(int digit)
         {
-            if (_menuIndex < 0 || _menuIndex >= _menuNames.Count) return;
-            var sb = new System.Text.StringBuilder();
-            if (withTotal) sb.Append("菜单，共 ").Append(_menuNames.Count).Append(" 项。");
-            sb.Append("第 ").Append(_menuIndex + 1).Append(" 项：")
-              .Append(_menuNames[_menuIndex]).Append('。');
-            _menuUntil = Time.realtimeSinceStartup + 12f;
-            Announcer.Now(sb.ToString());
-        }
-
-        /// <summary>菜单开着的时候，方向键/回车归菜单，不归焦点层（避免同一下按键两处响应）。</summary>
-        internal static bool MenuVisible()
-        {
-            return _menuNames.Count > 0 && Time.realtimeSinceStartup <= _menuUntil;
-        }
-
-        /// <summary>菜单光标位置（0 起）。只给探针/diag 用。</summary>
-        internal static int MenuIndex { get { return _menuIndex; } }
-
-        internal static void ActivateCurrentMenu() { ActivateMenuIndex(_menuIndex); }
-
-        internal static void CloseMenu()
-        {
-            if (_menuNames.Count == 0) return;
-            _menuUntil = 0f;
-            _quitArmedIndex = -1;
-            Announcer.Now("菜单已关闭。");
-        }
-
-        internal static void MoveMenu(int delta)
-        {
-            if (_menuNames.Count == 0) return;
-            int next = _menuIndex + delta;
-            if (next < 0 || next >= _menuNames.Count) { Announcer.Now("到头了。"); return; }
-            _menuIndex = next;
-            _menuPage = _menuIndex / MenuPageSize;
-            AnnounceMenuCurrent(false);
-        }
-
-        internal static void ChangeMenuPage(int delta)
-        {
-            if (_menuNames.Count == 0) return;
-            int pages = (_menuNames.Count + MenuPageSize - 1) / MenuPageSize;
-            int page = Mathf.Clamp(_menuPage + delta, 0, pages - 1);
-            if (page == _menuPage) { Announcer.Now("到头了。"); return; }
-            _menuPage = page;
-            _menuIndex = page * MenuPageSize;
-            AnnounceMenuCurrent(true);
-        }
-
-        /// <summary>菜单里选第 N 个（1–9；10 = 下一页）。人工按键与探针共用。</summary>
-        internal static void PickMenu(int digit)
-        {
-            if (_menuNames.Count == 0) return;
-            if (_quitArmedIndex >= 0 && Time.realtimeSinceStartup > _quitArmedUntil) _quitArmedIndex = -1;
-            if (digit <= 0) return;
-
-            if (digit == 10) { ChangeMenuPage(1); return; }
-
-            int idx = _menuPage * MenuPageSize + digit - 1;
-            if (idx < 0 || idx >= _menuNames.Count) { Announcer.Now("没有这一项。"); return; }
-            _menuIndex = idx;
-            ActivateMenuIndex(idx);
-        }
-
-        /// <summary>激活菜单第 idx 项。方向键回车与数字键走同一条路，探针也用它。</summary>
-        internal static void ActivateMenuIndex(int idx)
-        {
-            if (idx < 0 || idx >= _menuNames.Count) return;
-            string objName = _menuObjectNames[idx];
-            string cn = _menuNames[idx];
-
-            // 退出游戏：游戏自己没有任何确认框（PetUiIntegrationHub.QuitGame → DialogueEntryManager
-            // .RequestGracefulQuit 直接播完告别对话就关进程），键盘按错一个数字就没了。
-            // 这里按 CfgQuitConfirm（默认 true）要求同一个键在 5 秒内按两次；等待期间菜单保持可用，
-            // 玩家可以改选别的项（选别的项就等于取消）。
-            bool needConfirm = cn == "退出游戏" && (A11yHost.CfgQuitConfirm == null || A11yHost.CfgQuitConfirm.Value);
-            if (needConfirm && _quitArmedIndex != idx)
+            if (digit < 0 || digit > 9) return false;
+            if (Reader.InStory) return false;
+            if (!string.IsNullOrEmpty(CurrentPanelId())) return false;
+            try
             {
-                _quitArmedIndex = idx;
-                _quitArmedUntil = Time.realtimeSinceStartup + 5f;
-                _menuUntil = _quitArmedUntil;
-                Announcer.Now("再按一次确认退出游戏。");
-                return;
+                var objs = new List<string>();
+                var names = new List<string>();
+                foreach (var e in BarEntries)
+                {
+                    if (e[1] == "隐藏界面" || e[1] == "退出游戏") continue;
+                    if (FindBarButton(e[0]) == null) continue;
+                    if (names.Contains(e[1])) continue;
+                    objs.Add(e[0]);
+                    names.Add(e[1]);
+                }
+                int idx = digit == 0 ? objs.Count - 1 : digit - 1;
+                if (idx < 0 || idx >= objs.Count) return false;
+                bool ok = ActivateBarButton(objs[idx]);
+                A11yHost.Diag("[交互] 数字直达 " + digit + " → " + names[idx] + " ok=" + ok);
+                if (!ok) Announcer.Now(names[idx] + " 现在打不开。");
+                return ok;
             }
-            _quitArmedIndex = -1;
-            _menuUntil = 0f;
-
-            bool ok = ActivateBarButton(objName);
-            if (!ok) { Announcer.Now(cn + " 现在打不开。"); return; }
-            // 「隐藏界面」「退出游戏」不是「打开某个面板」，按完要说清楚发生了什么、怎么回来
-            if (cn == "隐藏界面") { Announcer.Now("界面已隐藏，按 F1 恢复。"); return; }
-            if (cn == "退出游戏") { Announcer.Now("正在退出游戏。"); return; }
-            // 面板真的打开时焦点层会念「面板名，共 N 个可操作项。当前：…」，
-            // 这里再补一句「打开X」就是重复；打不开的情况上面已经报过。
-            // （旧版是数字键直达，没有焦点层接手，才需要这句确认。）
-        }
-
-        private static void HandleMenuKeys()
-        {
-            if (!MenuVisible()) return;
-            if (_quitArmedIndex >= 0 && Time.realtimeSinceStartup > _quitArmedUntil) _quitArmedIndex = -1;
-
-            // 上下走列表、左右翻页、回车激活、Esc 关菜单：和游戏自己的列表一个手感。
-            // 数字键保留（老玩家习惯），但不作为唯一入口，也不在播报里教。
-            if (KeyEdge.Pressed(KeyCode.DownArrow)) { MoveMenu(1); return; }
-            if (KeyEdge.Pressed(KeyCode.UpArrow)) { MoveMenu(-1); return; }
-            if (KeyEdge.Pressed(KeyCode.RightArrow)) { ChangeMenuPage(1); return; }
-            if (KeyEdge.Pressed(KeyCode.LeftArrow)) { ChangeMenuPage(-1); return; }
-            if (KeyEdge.Pressed(KeyCode.Return) || KeyEdge.Pressed(KeyCode.KeypadEnter)
-                || KeyEdge.Pressed(KeyCode.Space))
+            catch (Exception e)
             {
-                ActivateMenuIndex(_menuIndex);
-                return;
+                A11yHost.Diag("[交互] 数字直达异常: " + e.Message);
+                return false;
             }
-            if (KeyEdge.Pressed(KeyCode.Escape)) { CloseMenu(); return; }
-
-            int digit = Choices.ReadMenuDigit();
-            if (digit > 0) PickMenu(digit);
         }
 
         private static Button FindBarButton(string objectName)
@@ -478,6 +378,9 @@ namespace MeiKongA11y
         internal static void ReportState()
         {
             var sb = new System.Text.StringBuilder();
+            // 界面被「隐藏界面」藏起来时先替玩家恢复（游戏侧是单向死路），并把结果并进这次播报
+            bool uiRestored = EnsureUiVisible(quiet: true);
+            if (uiRestored) sb.Append("界面已恢复显示。");
             string mode = Pet.DisplayMode();
             if (!string.IsNullOrEmpty(mode)) sb.Append(mode).Append("。");
 

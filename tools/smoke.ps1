@@ -11,8 +11,8 @@
     3. [补丁] 行数 = -ExpectedPatches（默认 17），且没有失败行；
     4. 语音后端已选（NVDA / ZDSR / SAPI / 无）；
     5. 全程没有 WARN / ERR / Exception；
-    6. 键盘链路（可选，需要游戏窗口能拿到前台）：F1 → 菜单播报 → 数字键 → 面板焦点进入 →
-   第二页隐藏界面 → 断言「界面已隐藏」→ F1 → 断言「界面已恢复显示」→ 菜单重新列出（证明按钮回到可交互）。
+    6. 键盘链路（可选，需要游戏窗口能拿到前台）：数字键直达主界面功能条 → 面板焦点进入 →
+   F2 报位置 → Esc 关闭（0.2.1.0 起 F1 功能菜单已退役，数字键是不显示列表的快捷方式）。
 
   说明：
     * 会把 <GameDir> 当成测试副本覆盖安装（只看 package 里的文件，不动存档）。
@@ -202,7 +202,7 @@ if ($warn.Count -gt 0) {
 # ---------------------------------------------------------------- 5. 键盘链路（可选）
 $drill = 'SKIP'
 if (-not $SkipKeyDrill) {
-    Say "5/5  真实按键链路（F1 → 菜单 → 数字键 → 面板）"
+    Say "5/5  真实按键链路（数字直达 → 面板焦点 → F2 → Esc）"
     try {
         $proc = Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($ExeName)) -ErrorAction Stop | Select-Object -First 1
         Add-Type -Namespace Win32 -Name U -MemberDefinition @'
@@ -223,44 +223,30 @@ if (-not $SkipKeyDrill) {
         } else {
             $wsh = New-Object -ComObject WScript.Shell
             $before = $text.Length
-            $wsh.SendKeys('{F1}'); Start-Sleep -Seconds 3
+            # 0.2.1.0：F1 功能菜单已退役 —— 数字键是「主界面快捷方式」，直接按 2 开番茄钟（不显示列表）。
+            $wsh.SendKeys('2'); Start-Sleep -Seconds 4
             $t1 = Get-LogText $log
-            # 第三十二轮：菜单改成列表播报——首项报总数（`菜单，共 12 项。第 1 项：小游戏。`）。
-            $menuOk = $t1 -match '\[朗读\] .*菜单，共 .* 项。第 1 项：'
-            $wsh.SendKeys('1'); Start-Sleep -Seconds 5
-            $t2 = Get-LogText $log
-            $panelOk = $t2 -match '\[焦点\] 进入'
+            $menuOk = ($t1 -match '\[交互\] 数字直达 2') -or ($t1 -match '\[焦点\] 进入 番茄钟')
+            $panelOk = $t1 -match '\[焦点\] 进入 番茄钟'
             # 第二十四轮：面板开着时 F2 必须报位置，不能落进「没有打开的面板」。
             # 第二十六轮：桌宠面板里可能正盖着 tool 剧情，这时 F2 按第二十二轮的规矩报
             # 「正在剧情中：…」也算对，不能只认「个可操作项」。
             $wsh.SendKeys('{F2}'); Start-Sleep -Seconds 2
-            $t2b = Get-LogText $log
-            $f2Story = $t2b -match '\[朗读\] .*剧情中'
-            $f2Panel = $t2b -match '\[朗读\] .*个可操作项'
-            $f2Ok = (-not ($t2b -match '当前没有打开的面板')) -and ($f2Story -or $f2Panel)
+            $t2 = Get-LogText $log
+            $f2Story = $t2 -match '\[朗读\] .*剧情中'
+            $f2Panel = $t2 -match '\[朗读\] .*个可操作项'
+            $f2Ok = (-not ($t2 -match '当前没有打开的面板')) -and ($f2Story -or $f2Panel)
             if ($f2Story) { Write-Host '  F2 命中剧情分支（面板里盖着 tool 剧情），按第二十二轮的规矩判定通过' }
-            $wsh.SendKeys('{ESC}'); Start-Sleep -Seconds 2
-
-            # 第十轮：隐藏界面是游戏侧单向死路，补丁必须能从 F1 恢复；顺带证明菜单真的回到可交互
-            $wsh.SendKeys('{F1}'); Start-Sleep -Seconds 2
-            $wsh.SendKeys('0'); Start-Sleep -Seconds 2      # 第二页：系统设置 / 隐藏界面 / 退出游戏
-            $wsh.SendKeys('2'); Start-Sleep -Seconds 3
+            # Esc 归游戏：面板应当被游戏自己的 CloseOrGoBack 关掉
+            $wsh.SendKeys('{ESC}'); Start-Sleep -Seconds 3
             $t3 = Get-LogText $log
-            $hiddenOk = $t3 -match '界面已隐藏'
-            $wsh.SendKeys('{F1}'); Start-Sleep -Seconds 3
-            $t4 = Get-LogText $log
-            $restoreOk = $t4 -match '界面已恢复显示'
-            $wsh.SendKeys('{F1}'); Start-Sleep -Seconds 2
-            $t5 = Get-LogText $log
-            $menuBackOk = $t5 -match '\[朗读\] .*菜单，共 .* 项。第 1 项：'
-            $wsh.SendKeys('{ESC}'); Start-Sleep -Milliseconds 500
+            $escOk = ($t3 -match '\[焦点\] .*退出') -or ($t3 -match '已关闭面板')
 
-            if ($menuOk -and $panelOk -and $f2Ok -and $hiddenOk -and $restoreOk -and $menuBackOk) { $drill = 'PASS' }
+            if ($menuOk -and $panelOk -and $f2Ok -and $escOk) { $drill = 'PASS' }
             else {
                 $drill = 'FAIL'
-                $fail += ("键盘链路失败：菜单播报=" + $menuOk + "，面板焦点=" + $panelOk + "，F2 报位置=" + $f2Ok +
-                          "，隐藏界面播报=" + $hiddenOk + "，F1 恢复界面=" + $restoreOk +
-                          "，恢复后菜单=" + $menuBackOk)
+                $fail += ("键盘链路失败：数字直达=" + $menuOk + "，面板焦点=" + $panelOk + "，F2 报位置=" + $f2Ok +
+                          "，Esc 关闭=" + $escOk)
             }
         }
     } catch {
@@ -271,31 +257,30 @@ if (-not $SkipKeyDrill) {
 # ---------------------------------------------------------------- 6. 菜单逐项走查（可选，-MenuWalk）
 $walk = 'SKIP'
 if ($MenuWalk -and $drill -like 'PASS*') {
-    Say "6/6  菜单逐项走查（12 项菜单里的 9 个安全入口）"
+    Say "6/6  数字直达走查（主界面 9 个安全入口）"
     try {
         $wsh2 = New-Object -ComObject WScript.Shell
-        # 页 / 数字键 / 预期进入的面板名（顺序与 Surfaces.BarEntries 一致；跳过小游戏、隐藏界面、退出游戏）
+        # 数字键 / 预期进入的面板名（顺序与 Surfaces.BarEntries 过滤后一致；
+        # 跳过小游戏、隐藏界面、退出游戏；0 = 最后一项 系统设置）
         $targets = @(
-            @{ Page = 1; Digit = '2'; Title = '番茄钟' },
-            @{ Page = 1; Digit = '3'; Title = '日程表' },
-            @{ Page = 1; Digit = '4'; Title = '音乐列表' },
-            @{ Page = 1; Digit = '5'; Title = '换装' },
-            @{ Page = 1; Digit = '6'; Title = '收藏内容' },
-            @{ Page = 1; Digit = '7'; Title = '联动展架' },
-            @{ Page = 1; Digit = '8'; Title = '鬼畜制造机' },
-            @{ Page = 1; Digit = '9'; Title = '背景设置' },
-            @{ Page = 2; Digit = '1'; Title = '系统设置' }
+            @{ Digit = '2'; Title = '番茄钟' },
+            @{ Digit = '3'; Title = '日程表' },
+            @{ Digit = '4'; Title = '音乐列表' },
+            @{ Digit = '5'; Title = '换装' },
+            @{ Digit = '6'; Title = '收藏内容' },
+            @{ Digit = '7'; Title = '联动展架' },
+            @{ Digit = '8'; Title = '鬼畜制造机' },
+            @{ Digit = '9'; Title = '背景设置' },
+            @{ Digit = '0'; Title = '系统设置' }
         )
         $bad = @()
         foreach ($tg in $targets) {
             $pos = (Get-LogText $log).Length
-            $wsh2.SendKeys('{F1}'); Start-Sleep -Seconds 2
-            if ($tg.Page -eq 2) { $wsh2.SendKeys('0'); Start-Sleep -Seconds 2 }
             $wsh2.SendKeys($tg.Digit); Start-Sleep -Seconds 4
             $seg = Get-LogText $log
             $seg = $seg.Substring([Math]::Min($pos, $seg.Length))
             if ($seg -notmatch ('\[焦点\] 进入 ' + [regex]::Escape($tg.Title))) {
-                $bad += ($tg.Title + '（第' + $tg.Page + '页 ' + $tg.Digit + '）')
+                $bad += ($tg.Title + '（数字 ' + $tg.Digit + '）')
             }
             $wsh2.SendKeys('{ESC}'); Start-Sleep -Seconds 2
             $wsh2.SendKeys('{ESC}'); Start-Sleep -Milliseconds 700
@@ -313,7 +298,7 @@ Say ("插件：" + $loaded)
 Say ("补丁挂载：" + $okLines.Count + "/" + $ExpectedPatches)
 Say ("语音后端：" + $backend)
 Say ("键盘链路：" + $drill)
-Say ("菜单走查：" + $walk)
+Say ("数字直达走查：" + $walk)
 if ($fail.Count -gt 0) {
     foreach ($f in $fail) { Say ("✗ " + $f) }
     Fail ("冒烟不通过（" + $fail.Count + " 项），日志：" + $log)

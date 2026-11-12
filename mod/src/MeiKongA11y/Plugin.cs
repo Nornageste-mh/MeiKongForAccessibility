@@ -27,7 +27,7 @@ namespace MeiKongA11y
     ///   · 只有一个场景、旧对话系统是不可达死代码 → 只挂 ShiMeng.DialogueV2 一套。
     ///   · 交互是主战场 → 面板感知 + 功能菜单 + 状态播报（Surfaces.cs）。
     /// </summary>
-    [BepInPlugin(Guid, "妹控计划 A11y Reader", "0.2.0.0")]
+    [BepInPlugin(Guid, "妹控计划 A11y Reader", "0.2.1.0")]
     public class Plugin : BaseUnityPlugin
     {
         public const string Guid = "meikong.a11y.reader";
@@ -56,7 +56,6 @@ namespace MeiKongA11y
         internal static ConfigEntry<bool>   CfgUnknownConfirm;   // 0.2.2 新契约：推断标签激活前二次确认（默认开）
 
         // ---- 交互 ----
-        internal static ConfigEntry<string> CfgMenuKey;          // 功能菜单
         internal static ConfigEntry<string> CfgStateKey;         // 状态播报
         internal static ConfigEntry<bool>   CfgAnnouncePanel;    // 面板开关播报
         internal static ConfigEntry<string> CfgPokeKey;          // 戳一下诗萌（= 左键点她）
@@ -95,7 +94,7 @@ namespace MeiKongA11y
                 "用数字键 1-9 选择对应编号的选项。等价于用鼠标点那一个按钮 —— 不预选、不跳过。\n" +
                 "选项还没全部出现完时按数字键无效（那是游戏自己的节奏）。");
 
-            CfgBackendKey = Config.Bind("朗读", "切换语音后端按键", "F9",
+            CfgBackendKey = Config.Bind("朗读", "切换语音后端按键", "Alt+Shift+F9",
                 "运行中切换语音后端的按键。可写修饰键组合，例如 F9、Alt+Shift+F9、Ctrl+Alt+F9。\n" +
                 "按一下切到下一个「当前可用」的后端（自动 → Tolk → NVDA → 争渡 → SAPI → 自动），\n" +
                 "当前不可用的会被跳过并在播报里说明；选择会写进本配置文件，下次启动仍生效。\n" +
@@ -144,10 +143,6 @@ namespace MeiKongA11y
                 "再按一次才真的激活。本作有大量图标按钮（功能条、换装卡、通用关闭按钮）没有文字，\n" +
                 "这个二次确认就是防止「读到一个猜的名字，一按回车就点错了」。");
 
-            CfgMenuKey = Config.Bind("交互", "功能菜单键", "F1",
-                "念出功能菜单（小游戏 / 番茄钟 / 日程表 / 设置 / 故事与收藏 / 换装）并编号，\n" +
-                "然后按数字键直接打开 —— 不用在一堆控件里翻。");
-
             CfgStateKey = Config.Bind("交互", "状态播报键", "F2",
                 "念出当前打开的面板、里面有几个可操作项、番茄钟剩余时间等状态。");
 
@@ -193,9 +188,10 @@ namespace MeiKongA11y
                 "    按 F1 → StartScenario( Story_MorningGreeting , … , DialogueTriggerContext.RunnerTest() )\n" +
                 "那个触发器工厂的名字就叫 RunnerTest，参数的默认值直接写着「F1 测试键」。\n" +
                 "也就是说：按 F1 会打断当前剧情、从开局第一句重新播。\n\n" +
-                "开着这一项时，F1 只当补丁的功能菜单用；拦的是「RunnerTest 触发器」这一个入口，\n" +
-                "不碰游戏正常的任何一段剧情。\n" +
-                "关掉它就恢复游戏原样 —— 但那样 F1 会一边念菜单、一边从开局重播。");
+                "补丁不再占用 F1（0.2.1.0 起功能菜单已退役），所以这一项现在只做一件事：\n" +
+                "屏蔽这个开发者残留，免得盲人玩家误按一次就把剧情打回开局。\n" +
+                "拦的只是「RunnerTest 触发器」这一个入口，不碰游戏正常的任何一段剧情。\n" +
+                "关掉它就完全恢复游戏原样。");
             CfgStartupHint = Config.Bind("其它", "启动时播报", true,
                 "游戏启动后朗读一句「无障碍补丁已加载」，用来确认读屏通路是通的。");
 
@@ -278,7 +274,7 @@ namespace MeiKongA11y
                     // 想了解的人看 package\安装说明.md。
                     // 只留四个真正必要的键；「补丁已加载」这种话听起来像外挂，
                 // 换成游戏自己的口吻（用户 m04680：要像游戏本身就有无障碍）。
-                Announcer.Auto("无障碍已启用。F1 菜单，F2 状态，退格重读，F5 全屏。");
+                Announcer.Auto("无障碍已启用。F2 状态，退格重读，F5 全屏。");
                 yield break;
             }
         }
@@ -295,7 +291,7 @@ namespace MeiKongA11y
                 // 走的是游戏自己的 Selectable 导航与 ISubmitHandler 通路。
                 // 记忆翻牌例外：那一套网格由 Minigame 自己接管（牌面要人工命名，
                 // 且 Enter 要走 OnCardClicked(int)），两套同时按键会念两遍。
-                if (!Minigame.IsActive() && !Surfaces.MenuVisible())
+                if (!Minigame.IsActive())
                 {
                     try { Focus.HandleKeys(); }
                     catch (Exception e) { A11yHost.Diag("[每帧] 界面键异常: " + e.Message); }
@@ -303,25 +299,34 @@ namespace MeiKongA11y
 
                 try { Announcer.Tick(); } catch { }
 
-                // 热键
-                // F1 是开关键：菜单开着时再按一次就关，不用记两个键。
-                if (KeyDown(CfgMenuKey))
-                {
-                    if (Surfaces.MenuVisible()) Surfaces.CloseMenu();
-                    else Surfaces.OpenMenu();
-                }
+                // 热键（0.2.1.0：F1 功能菜单已退役，见 docs/操作约定.md「本作差异」；
+                // 主界面快捷方式改为直接按数字键 1–9 / 0，不显示列表、没有模式开关）
                 if (KeyDown(CfgStateKey)) Surfaces.ReportState();
-                if (KeyDown(CfgRepeatKey)) Reader.RepeatLast();
+                if (KeyDown(CfgRepeatKey)) { Surfaces.EnsureUiVisible(quiet: true); Reader.RepeatLast(); }
 
-                // 运行中切换语音后端（默认 F9。游戏若占用 F9，把配置改成 Alt+Shift+F9）
-                if (Hotkey.Down(CfgBackendKey != null ? CfgBackendKey.Value : ""))
+                // 运行中切换语音后端：公约默认 Alt+Shift+F9；同时保留 F9 作兼容别名
+                if (Hotkey.Down(CfgBackendKey != null ? CfgBackendKey.Value : "")
+                    || KeyEdge.Pressed(KeyCode.F9))
                     Repeat.Say(Speech.CycleAvailable(), true);
                 if (KeyDown(CfgPokeKey)) Pet.Poke();
                 if (KeyDown(CfgStoryBtnKey)) Pet.ClickStoryButton();
 
+                // 主界面空闲时数字键直达功能条入口（剧情里数字键归选项、面板里归焦点层）
+                if (!Reader.InStory && !Minigame.IsActive())
+                {
+                    // 注意：KeyEdge.Pressed 是「边沿闩锁」——同一帧问第二次会返回 false，
+                    // 所以每个键只能问一次，先存下来再判断（数字 0 曾因此整条不触发）。
+                    int fired = -1;
+                    for (int i = 1; i <= 9; i++)
+                        if (KeyEdge.Pressed(KeyCode.Alpha0 + i) || KeyEdge.Pressed(KeyCode.Keypad0 + i)) { fired = i; break; }
+                    if (fired < 0 && (KeyEdge.Pressed(KeyCode.Alpha0) || KeyEdge.Pressed(KeyCode.Keypad0))) fired = 0;
+                    if (fired >= 0 && Surfaces.ActivateBarDigit(fired)) return;
+                }
+
                 // 保命键：任何时候按都能切回全屏（桌宠模式下的唯一退路）
                 if (KeyDown(CfgFullScreenKey))
                 {
+                    Surfaces.EnsureUiVisible(quiet: true);
                     if (Pet.IsDeskPet())
                     {
                         if (Pet.ExitDeskPet()) Repeat.Say("正在切回全屏模式。");

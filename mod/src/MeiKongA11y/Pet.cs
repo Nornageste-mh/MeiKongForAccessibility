@@ -48,6 +48,47 @@ namespace MeiKongA11y
             catch (Exception e) { A11yHost.Diag("[桌宠] 探针异常: " + e.Message); }
         }
 
+        /// <summary>游戏里“诗萌”本体的点击目标（鼠标点中的那个对象）。
+        /// 焦点层要把它当成一项走到，就得知道它在屏幕上的位置。</summary>
+        internal static GameObject ClickTargetObject()
+        {
+            Probe();
+            if (_clickType == null) return null;
+            try
+            {
+                var arr = Resources.FindObjectsOfTypeAll(_clickType);
+                if (arr == null || arr.Length == 0) return null;
+                var c = arr[0] as Component;
+                return c != null ? c.gameObject : null;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>「和诗萌聊聊」气泡当前是否在显示（有就把按钮对象与游戏内标签一起给出）。
+        /// 两个用途：焦点层把它登记成可导航项；气泡出现时主动提醒。</summary>
+        internal static bool HasStoryBubble(out GameObject buttonObject, out string label)
+        {
+            buttonObject = null; label = "";
+            try
+            {
+                var asm = typeof(ShiMeng.DialogueV2.DialogueLine).Assembly;
+                var t = asm.GetType("ShiMeng.DialogueV2.MainStoryTriggerButtonVariant");
+                if (t == null) return false;
+                foreach (var obj in Resources.FindObjectsOfTypeAll(t))
+                {
+                    var comp = obj as Component;
+                    if (comp == null || !comp.gameObject.activeInHierarchy) continue;
+                    var btn = comp.GetComponent<Button>() ?? comp.GetComponentInChildren<Button>(true);
+                    if (btn == null || !btn.IsInteractable()) continue;
+                    buttonObject = btn.gameObject;
+                    label = Label(t, obj);
+                    return true;
+                }
+            }
+            catch (Exception e) { A11yHost.Diag("[桌宠] HasStoryBubble 异常: " + e.Message); }
+            return false;
+        }
+
         /// <summary>「戳一下诗萌」：等价于用鼠标左键点她。</summary>
         internal static bool Poke()
         {
@@ -236,23 +277,20 @@ namespace MeiKongA11y
         /// `Label` 属性 —— variantLabel 为空时回退到对象名，所以别指望对象名有意义）。
         /// 找一个**当前激活**的变体点它；没有激活的就回退到「戳一下诗萌」。
         /// </summary>
-        internal static bool ClickStoryButton()
+        internal static bool ClickStoryButton(bool quiet = false)
         {
             try
             {
-                var asm = typeof(ShiMeng.DialogueV2.DialogueLine).Assembly;
-                var t = asm.GetType("ShiMeng.DialogueV2.MainStoryTriggerButtonVariant");
-                if (t == null) return Poke();
-                foreach (var obj in Resources.FindObjectsOfTypeAll(t))
+                GameObject btnGo; string label;
+                if (HasStoryBubble(out btnGo, out label) && btnGo != null)
                 {
-                    var comp = obj as Component;
-                    if (comp == null || !comp.gameObject.activeInHierarchy) continue;
-                    var btn = comp.GetComponent<Button>() ?? comp.GetComponentInChildren<Button>(true);
-                    if (btn == null || !btn.IsInteractable()) continue;
-                    string label = Label(t, obj);
-                    btn.onClick.Invoke();
-                    Repeat.Say("已按下：" + label, true);
-                    return true;
+                    var btn = btnGo.GetComponent<Button>() ?? btnGo.GetComponentInChildren<Button>(true);
+                    if (btn != null)
+                    {
+                        btn.onClick.Invoke();
+                        if (!quiet) Repeat.Say("已按下：" + label, true);
+                        return true;
+                    }
                 }
                 // 没有可见的互动按钮 → 等价于直接戳她
                 return Poke();

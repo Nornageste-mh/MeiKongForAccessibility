@@ -47,6 +47,13 @@ namespace MeiKongA11y
             public int Index;      // 组内序号（1 起）
             public int Count;      // 组内总数
             public bool InList;    // 组内 ≥3 项
+
+            // 虚拟项：游戏里没有 Selectable，但玩家应该能用方向键走到的交互目标
+            // （诗萌身体、和诗萌聊聊气泡）。它们不进 EventSystem 选中态，
+            // 激活交给游戏自己的动作函数（不拄逻辑、不模拟鼠标）。
+            public GameObject Go;
+            public Action Activate;
+            public bool Virtual;
         }
 
         internal static Transform Root;
@@ -67,6 +74,11 @@ namespace MeiKongA11y
         private static string _hint = "";
         private static int _gen;
         private static readonly List<Item> _items = new List<Item>();
+
+        // 虚拟项：游戏没给它们 Selectable（诗萌身体、和诗萌聊聊气泡）。
+        // “另一部分玩家希望一切都能导航”（m04680）要求这两个入口不能只剩热键。
+        private static readonly List<Item> _extras = new List<Item>();
+        private static Item _virtualCur;
 
         // 面板展开动画期（PlayOpen 期间 CanvasGroup.interactable=false，此刻设焦点会被吞）：
         // 只在「刚打开」的这 1.5 秒里有界重试，不是常驻轮询。
@@ -169,6 +181,7 @@ namespace MeiKongA11y
 
         internal static void Leave()
         {
+            _virtualCur = null;
             if (_editing != null) EndEditing(false);
             Root = null;
             Domain = Kind.None;
@@ -259,6 +272,15 @@ namespace MeiKongA11y
             try
             {
                 PumpEditing();
+                // 0) 「和诗萌聊聊」气泡冒出来时说一句（只读镜像，见 PollStoryBubble 的说明）
+                PollStoryBubble();
+                // 0) 虚拟项的目标没了（气泡收起 / 换了面板 / 剧情结束）：别让看不见的头占着当前项
+                if (_virtualCur != null && (_virtualCur.Go == null || !_virtualCur.Go.activeInHierarchy))
+                {
+                    A11yHost.Diag("[焦点] 虚拟项已消失：" + _virtualCur.Label);
+                    _virtualCur = null;
+                    if (Active) TryFocusFirst(false);
+                }
                 // 0) 剧情播完了：把「现在在哪、当前是什么」补报一次。
                 // 剧情期间按键让给了游戏（HandleKeys 直接返回），玩家会失去上下文。
                 if (_storyWasActive && !Reader.InStory)
@@ -397,7 +419,7 @@ namespace MeiKongA11y
                             var it = _items[i];
                             if (!string.Equals(it.Section, _sectionRetryName, StringComparison.Ordinal)) continue;
                             if (it.Locked || IsDismissive(it.S)) continue;
-                            if (it.S == Current) break;
+                            if (ReferenceEquals(it, CurrentItem)) break;
                             MoveTo(it.S, "动作后");
                             A11yHost.Diag("[焦点] 换页后的可用项就绪，补落：" + it.Label);
                             moved = true;
@@ -471,12 +493,11 @@ namespace MeiKongA11y
                 if (KeyEdge.Pressed(KeyCode.LeftArrow)) { MoveBy(-1, 0); return true; }
                 if (KeyEdge.Pressed(KeyCode.RightArrow)) { MoveBy(+1, 0); return true; }
 
-                // 长列表（唱片 25 首、鬼畜制造机 52 个工程）一格一格挪太慢：
-                // Home/End 到首尾，PageUp/PageDown 跳 5 项。游戏自己不用这四个键（反编译确认 0 处占用）。
+                // 长列表（唱片 25 首、鬼畜制造机 52 个工程）一格一格挪太慢：Home/End 到首尾。
+                // PageUp/PageDown 已按《痴情妹妹》的键概念删掉（参考只有 Home/End，多出来的键
+                // 会让不同作品的手感分叉，见 docs/操作逻辑公约.md）。
                 if (KeyEdge.Pressed(KeyCode.Home)) { JumpTo(0); return true; }
                 if (KeyEdge.Pressed(KeyCode.End)) { JumpTo(-1); return true; }
-                if (KeyEdge.Pressed(KeyCode.PageDown)) { JumpBy(5); return true; }
-                if (KeyEdge.Pressed(KeyCode.PageUp)) { JumpBy(-5); return true; }
 
                 // 剧情界面里空格/小键盘回车是游戏自己的「推进剧情」，绝不能被我们吃掉；
                 // 只有主回车是「按下当前按钮」（浏览与激活分离）。
@@ -493,9 +514,10 @@ namespace MeiKongA11y
                     return true;
                 }
 
+                // Esc 一律交游戏（参考实现里 Esc 从不被补丁拦：它是游戏自己的「取消/返回」）。
+                // 旧版主界面那声「退出浏览。」是补丁自造的模式语义，0.2.1.0 起删掉。
                 if (KeyEdge.Pressed(KeyCode.Escape))
                 {
-                    if (Domain == Kind.Scene) { Announcer.Now("退出浏览。"); Leave(); return true; }
                     if (Domain == Kind.PetPanel && !string.IsNullOrEmpty(DomainId))
                     {
                         Surfaces.ClosePanel(DomainId);
@@ -617,9 +639,10 @@ namespace MeiKongA11y
 
         internal static void MoveBy(int dx, int dy)
         {
-            var cur = Current;
+            var curItem = CurrentItem;
+            var cur = curItem != null ? curItem.S : Current;
             // 还没聚焦（面板刚开、或鼠标把选中项清了）：方向键先当作「落进第一项」
-            if (cur == null || !InDomain(cur) || _items.Count == 0)
+            if (curItem == null || _items.Count == 0)
             {
                 if (_settleUntil > 0f) return;   // 面板还在淡入，先别急着报「没有控件」
                 if (TryFocusFirst(true)) return;
@@ -627,8 +650,17 @@ namespace MeiKongA11y
                 return;
             }
 
-            var curItem = ItemOf(cur);
-            string oldSection = curItem != null ? curItem.Section : "";
+            string oldSection = curItem.Section;
+
+            // 当前是虚拟项（诗萌身体 / 对话气泡）：游戏没有给它导航图，按屏幕位置找最近的一项。
+            // 这是「一次性最近邻查询」，不是常驻索引（与几何回退同一定性，详见交互形态判定）。
+            if (cur == null || curItem.Virtual)
+            {
+                var nx = NearestItemInDirection(curItem, dx, dy);
+                if (nx != null) { MoveToItem(nx, oldSection); return; }
+                Announcer.Now("到头了。");
+                return;
+            }
 
             Selectable next = null;
             if (dx > 0) next = cur.FindSelectableOnRight();
@@ -659,11 +691,17 @@ namespace MeiKongA11y
                 MoveTo(geo, oldSection);
                 return;
             }
+
+            // 游戏导航图和真控件都给不出答案时才看虚拟项：气泡在诗萌身侧、诗萌在屏幕中部，
+            // 从图标区往这两个方向走，通常就落在它们身上。
+            var vx = NearestItemInDirection(curItem, dx, dy);
+            if (vx != null) { MoveToItem(vx, oldSection); return; }
             Announcer.Now("到头了。");
         }
 
         private static void MoveTo(Selectable s, string oldSection)
         {
+            _virtualCur = null;
             var es = EventSystem.current;
             if (es == null) return;
             es.SetSelectedGameObject(s.gameObject);
@@ -699,7 +737,30 @@ namespace MeiKongA11y
             catch (Exception e) { A11yHost.Diag("[焦点] 跳转异常: " + e.Message); }
         }
 
-        /// <summary>相对当前项跳 delta 项（PageUp/PageDown 用）。</summary>
+        private static bool _quitArmed;
+        private static float _quitArmedUntil;
+
+        /// <summary>这一项是不是「退出游戏」。默认按标签判，也能用配置里的对象名（CfgQuitNames）兜底。</summary>
+        private static bool IsQuitTarget(Selectable s, Item it)
+        {
+            if (s == null) return false;
+            string label = it != null ? (it.Label ?? "") : "";
+            if (label == "退出游戏" || label == "退出") return true;
+            try
+            {
+                string names = A11yHost.CfgQuitNames != null ? A11yHost.CfgQuitNames.Value : "退出游戏,退出,Quit";
+                if (!string.IsNullOrEmpty(names))
+                    foreach (var raw in names.Split(','))
+                    {
+                        string n = raw.Trim();
+                        if (n.Length > 0 && string.Equals(s.gameObject.name, n, StringComparison.Ordinal)) return true;
+                    }
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>相对当前项跳 delta 项（保留给探针/测试用；PageUp/PageDown 已按公约删除）。</summary>
         internal static void JumpBy(int delta)
         {
             try
@@ -716,13 +777,41 @@ namespace MeiKongA11y
         }
         internal static void ActivateCurrent()
         {
+            var curItem0 = CurrentItem;
+            if (curItem0 != null && curItem0.Virtual)
+            {
+                // 虚拟项的动作来自游戏自己的入口：气泡＝游戏按钮的 onClick，
+                // 诗萌＝左键点她的等价调用（DialogueEntryClickTarget.FireClick）。
+                try { if (curItem0.Activate != null) curItem0.Activate(); }
+                catch (Exception e) { A11yHost.Diag("[焦点] 虚拟项激活异常: " + e.Message); }
+                return;
+            }
             var cur = Current;
             if (cur == null) { Announcer.Now("没有可操作项。"); return; }
+            var ciCur = ItemOf(cur);
             if (!cur.IsInteractable())
             {
-                var ci = ItemOf(cur);
-                Announcer.Now((ci != null && !string.IsNullOrEmpty(ci.Label) ? ci.Label : "这项") + "当前不可用。");
+                Announcer.Now((ciCur != null && !string.IsNullOrEmpty(ciCur.Label) ? ciCur.Label : "这项") + "当前不可用。");
                 return;
+            }
+
+            // 退出游戏没有任何确认框（PetUiIntegrationHub.QuitGame → RequestGracefulQuit
+            // 播完告别对话就直接关进程），键盘玩家误按一次就没了。沿用旧口径：
+            // 同一项 5 秒内按两次才真的退，中间选别的项即取消。
+            if (IsQuitTarget(cur, ciCur))
+            {
+                bool needConfirm = A11yHost.CfgQuitConfirm == null || A11yHost.CfgQuitConfirm.Value;
+                if (needConfirm)
+                {
+                    if (!_quitArmed || Time.realtimeSinceStartup > _quitArmedUntil)
+                    {
+                        _quitArmed = true;
+                        _quitArmedUntil = Time.realtimeSinceStartup + 5f;
+                        Announcer.Now("再按一次确认退出游戏。");
+                        return;
+                    }
+                    _quitArmed = false;
+                }
             }
 
             if (cur is TMPro.TMP_InputField)
@@ -875,8 +964,12 @@ namespace MeiKongA11y
                         // 只说「已进入 章节，第1节」，再排队等它可用后补一次定位。
                         if (target.Locked)
                         {
-                            if (EventSystem.current != null)
-                                EventSystem.current.SetSelectedGameObject(target.S.gameObject);
+                            if (target.S != null)
+                            {
+                                if (EventSystem.current != null)
+                                    EventSystem.current.SetSelectedGameObject(target.S.gameObject);
+                            }
+                            else { ClearSelection(); _virtualCur = target; }
                             Announcer.Now("已进入" + (string.IsNullOrEmpty(target.Section) ? "" : target.Section)
                                           + "，" + target.Label + "，共 " + _items.Count + " 项。");
                             _sectionRetryAt = Time.realtimeSinceStartup + 0.4f;
@@ -886,7 +979,8 @@ namespace MeiKongA11y
                             return;
                         }
                         A11yHost.Diag("[焦点] 动作后原选中项失效，落到内容最多的分组：" + target.Section);
-                        MoveTo(target.S, "动作后");
+                        if (target.S != null) MoveTo(target.S, "动作后");
+                        else MoveToItem(target, target.Section ?? "");
                         return;
                     }
                     A11yHost.Diag("[焦点] 动作后原选中项失效，重新聚焦");
@@ -1037,6 +1131,160 @@ namespace MeiKongA11y
         /// 只读游戏自己的播放状态与当前曲目，不接管任何输入、不改游戏字段；
         /// 节流 0.5 秒，并且只在主界面或音乐面板里做。
         /// </summary>
+        // ==================== 虚拟项（游戏里没有 Selectable 的交互目标） ====================
+
+        /// <summary>
+        /// 把「游戏里没有 Selectable、但玩家应该能走到」的目标登记成虚拟项。
+        /// 只做只读查询：不打补丁、不改游戏对象、不往游戏里加任何东西。
+        /// 目前两个：
+        ///   · 和诗萌聊聊气泡：游戏真有这个按钮（MainStoryTriggerButtonVariant），
+        ///     只是它挂在主界面图标根之外，方向键走不到，于是只剩 F4 热键——对「希望一切都能导航」
+        ///     的玩家等于不存在（m04680）。
+        ///   · 诗萌本人：游戏里是 DialogueEntryClickTarget，直接点身体，没有按钮可聚焦。
+        /// </summary>
+        /// <summary>
+        /// 气泡按钮身上那段文字常常是 prefab 的对象名（`CommonButton (3)`），
+        /// 念出来只会让玩家以为是坏掉的东西。这里只认「像人话」的标签（含中文），
+        /// 其余一律用固定说法「和诗萌聊聊」—— 与玩家在画面上看到的气泡同义。
+        /// </summary>
+        private static bool LooksLikeButtonName(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return true;
+            foreach (char c in s)
+                if (c >= 0x4E00 && c <= 0x9FFF) return false;
+            return true;
+        }
+
+        private static void CollectExtras()
+        {
+            _extras.Clear();
+            // 界面被游戏自己的「隐藏界面」藏起来时，Root 仍然指向主界面根，
+            // 但玩家眼前是黑的 —— 这时不该再把「诗萌 / 和诗萌聊聊」当成可浏览项。
+            if (Domain != Kind.Scene || Root == null || Surfaces.ChromeHidden()) return;
+            try
+            {
+                GameObject bubble;
+                string bubbleLabel;
+                if (Pet.HasStoryBubble(out bubble, out bubbleLabel) && bubble != null)
+                {
+                    var b = bubble.GetComponent<Button>() ?? bubble.GetComponentInChildren<Button>(true);
+                    // 气泡本来就挂在主界面根下时会被普通收集收进去，这里只补「收不到」的那份。
+                    if (b != null && InDomain(b) == false)
+                    {
+                        _extras.Add(new Item
+                        {
+                            S = null,
+                            Go = bubble,
+                            Label = LooksLikeButtonName(bubbleLabel) ? "和诗萌聊聊" : bubbleLabel,
+                            Role = "按钮",
+                            Section = "互动",
+                            Virtual = true,
+                            Activate = () => Pet.ClickStoryButton(true)
+                        });
+                    }
+                }
+            }
+            catch (Exception e) { A11yHost.Diag("[焦点] 气泡登记失败: " + e.Message); }
+            try
+            {
+                GameObject body = Pet.ClickTargetObject();
+                if (body != null && body.activeInHierarchy)
+                {
+                    _extras.Add(new Item
+                    {
+                        S = null,
+                        Go = body,
+                        Label = "诗萌",
+                        Role = "按钮",
+                        Section = "互动",
+                        Virtual = true,
+                        Activate = () => Pet.Poke()
+                    });
+                }
+            }
+            catch (Exception e) { A11yHost.Diag("[焦点] 诗萌登记失败: " + e.Message); }
+        }
+
+        private static Vector3 ItemPosition(Item it)
+        {
+            if (it == null) return Vector3.zero;
+            if (it.S != null) return PositionOf(it.S);
+            if (it.Go != null) return it.Go.transform.position;
+            return Vector3.zero;
+        }
+
+        /// <summary>在全部项（含虚拟项）里按方向找最近的一项；只做一次查询，不缓存顺序。</summary>
+        private static Item NearestItemInDirection(Item from, int dx, int dy)
+        {
+            if (from == null) return null;
+            Collect();
+            if (_items.Count == 0) return null;
+            Vector3 p0 = ItemPosition(from);
+            Item best = null;
+            float bestScore = float.MaxValue;
+            for (int i = 0; i < _items.Count; i++)
+            {
+                var it = _items[i];
+                if (ReferenceEquals(it, from)) continue;
+                if (it.Locked) continue;
+                Vector3 p = ItemPosition(it);
+                float ddx = p.x - p0.x, ddy = p.y - p0.y;
+                float u = ddx * dx + ddy * dy;
+                if (u <= 4f) continue;
+                float perp = Mathf.Abs(ddx * dy - ddy * dx);
+                float score = perp * 4f + Mathf.Abs(u);
+                if (score < bestScore) { bestScore = score; best = it; }
+            }
+            return best;
+        }
+
+        /// <summary>走到某一项：真控件复用 MoveTo，虚拟项只记选中态。</summary>
+        private static void MoveToItem(Item it, string oldSection)
+        {
+            if (it == null) return;
+            if (it.S != null) { MoveTo(it.S, oldSection); return; }
+            // 虚拟项没有可被 EventSystem 选中的物件（游戏没给），屏幕上也不会出现高亮——
+            // 这是「最小选中表示」的一部分，已登记在 docs/交互形态判定.md 的遗留缺陷里。
+            ClearSelection();
+            _virtualCur = it;
+            bool sectionChanged = !string.IsNullOrEmpty(it.Section) && it.Section != oldSection;
+            A11yHost.Diag("[焦点] 选中(虚拟) " + it.Label);
+            Announce(it, sectionChanged);
+        }
+
+        private static bool _bubbleSeen;
+        private static float _bubblePollAt;
+
+        /// <summary>
+        /// 「和诗萌聊聊」气泡出现时主动说一句（用户要求）。
+        /// 定性：只读镜像（不动输入、不改游戏对象），与唱片机换歌那处同理；
+        /// 读屏玩家看不见屏幕上冒出来的气泡，等他自己去按 F4 等于这个入口不存在。
+        /// 措辞按「只报事实」：说气泡出现了，不解释能做什么。
+        /// </summary>
+        private static void PollStoryBubble()
+        {
+            try
+            {
+                if (Time.realtimeSinceStartup - _bubblePollAt < 0.5f) return;
+                _bubblePollAt = Time.realtimeSinceStartup;
+                GameObject bubble; string label;
+                bool on = Pet.HasStoryBubble(out bubble, out label) && !Reader.InStory && !IsPanelActive;
+                if (on && !_bubbleSeen)
+                {
+                    _bubbleSeen = true;
+                    A11yHost.Diag("[焦点] 对话气泡出现");
+                    Announcer.Now("诗萌旁边出现了对话气泡。");
+                    if (Active && Domain == Kind.Scene) Collect();   // 立刻进列表，方向键就能走到
+                }
+                else if (!on && _bubbleSeen)
+                {
+                    _bubbleSeen = false;
+                    if (Active && Domain == Kind.Scene) Collect();
+                }
+            }
+            catch { }
+        }
+
         private static void PollMusicChange()
         {
             if (!Active) { _lastMusicTitle = ""; return; }
@@ -1139,7 +1387,7 @@ namespace MeiKongA11y
             {
                 if (!Active) return "焦点未进入（当前没有打开的面板）";
                 Collect();
-                var it = ItemOf(Current);
+                var it = CurrentItem;
                 return Title + "（" + Domain + "）共 " + _items.Count + " 项，当前："
                        + (it != null ? Describe(it, true) : "无");
             }
@@ -1284,7 +1532,7 @@ namespace MeiKongA11y
             {
                 if (!Active) return "";
                 Collect();
-                var it = ItemOf(Current);
+                var it = CurrentItem;
                 string title = string.IsNullOrEmpty(Title) ? "当前界面" : Title;
                 return title + "，共 " + _items.Count + " 个可操作项，当前："
                        + (it != null ? Describe(it, true) : "无");
@@ -1300,6 +1548,16 @@ namespace MeiKongA11y
                 if (es == null) return null;
                 var go = es.currentSelectedGameObject;
                 return go == null ? null : go.GetComponent<Selectable>();
+            }
+        }
+
+        /// <summary>当前项：真控件从 EventSystem 的选中态来；虚拟项由补丁记（游戏里没有可被选中的物件）。</summary>
+        private static Item CurrentItem
+        {
+            get
+            {
+                if (_virtualCur != null) return _virtualCur;
+                return ItemOf(Current);
             }
         }
 
@@ -1324,7 +1582,8 @@ namespace MeiKongA11y
                     var it = _items[i];
                     sb.Append("\n  #").Append(i + 1).Append(' ').Append(it.Section).Append(" | ")
                       .Append(it.Label).Append(" | ").Append(it.Role).Append(" | ")
-                      .Append(it.S.IsInteractable() ? "ok" : "locked").Append(" | ").Append(PathOf(it.S));
+                      .Append(it.S == null ? "virtual" : (it.S.IsInteractable() ? "ok" : "locked")).Append(" | ")
+                      .Append(it.S != null ? PathOf(it.S) : (it.Go != null ? it.Go.name : ""));
                 }
                 return sb.ToString();
             }
@@ -1363,8 +1622,9 @@ namespace MeiKongA11y
 
             int start = PickFirstIndex();
             var first = _items[start];
-            EventSystem.current.SetSelectedGameObject(first.S.gameObject);
-            A11yHost.Diag("[焦点] 首项 " + first.S.gameObject.name + "（" + first.Section + "）共 " + _items.Count + " 项");
+            if (first.S != null) EventSystem.current.SetSelectedGameObject(first.S.gameObject);
+            else { ClearSelection(); _virtualCur = first; }
+            A11yHost.Diag("[焦点] 首项 " + (first.S != null ? first.S.gameObject.name : first.Go.name) + "（" + first.Section + "）共 " + _items.Count + " 项");
 
             if (announce)
             {
@@ -1446,7 +1706,7 @@ namespace MeiKongA11y
                         var it = _items[i];
                         if (it.Section == primary && it.Role == preferRole && it.Label != null
                             && it.Label.IndexOf(preferLabel, StringComparison.Ordinal) >= 0
-                            && it.S.IsInteractable()) return i;
+                            && it.S != null && it.S.IsInteractable()) return i;
                     }
                 }
                 // 只满足「角色」：番茄钟的三个步进器里去找输入框                if (preferRole.Length > 0)
@@ -1454,13 +1714,13 @@ namespace MeiKongA11y
                     for (int i = 0; i < _items.Count; i++)
                     {
                         var it = _items[i];
-                        if (it.Section == primary && it.Role == preferRole && it.S.IsInteractable()) return i;
+                        if (it.Section == primary && it.Role == preferRole && it.S != null && it.S.IsInteractable()) return i;
                     }
                 }
                 for (int i = 0; i < _items.Count; i++)
                 {
                     var it = _items[i];
-                    if (it.Section == primary && !IsDismissive(it.S) && it.S.IsInteractable()) return i;
+                    if (it.Section == primary && it.S != null && !IsDismissive(it.S) && it.S.IsInteractable()) return i;
                 }
                 for (int i = 0; i < _items.Count; i++)
                 {
@@ -1470,13 +1730,13 @@ namespace MeiKongA11y
             }
 
             for (int i = 0; i < _items.Count; i++)
-                if (!IsDismissive(_items[i].S) && _items[i].S.IsInteractable()) return i;
+                if (_items[i].S != null && !IsDismissive(_items[i].S) && _items[i].S.IsInteractable()) return i;
 
             for (int i = 0; i < _items.Count; i++)
                 if (!IsDismissive(_items[i].S)) return i;
 
             for (int i = 0; i < _items.Count; i++)
-                if (_items[i].S.IsInteractable()) return i;
+                if (_items[i].S != null && _items[i].S.IsInteractable()) return i;
 
             return 0;
         }
@@ -1649,6 +1909,18 @@ namespace MeiKongA11y
                 sectionCounts[k] = c + 1;
                 _items.Add(it);
             }
+            // 虚拟项（游戏里没有 Selectable 的交互目标）也要参与分组与序号，
+            // 否则玩家听到的“第 N 项，共 M 项”会跟能走到的数量对不上。
+            CollectExtras();
+            for (int i = 0; i < _extras.Count; i++)
+            {
+                var it = _extras[i];
+                string k = it.Section ?? "";
+                int c; sectionCounts.TryGetValue(k, out c);
+                sectionCounts[k] = c + 1;
+                _items.Add(it);
+            }
+
             var seen = new Dictionary<string, int>(StringComparer.Ordinal);
             for (int i = 0; i < _items.Count; i++)
             {
@@ -1841,6 +2113,7 @@ namespace MeiKongA11y
             for (int i = 0; i < _items.Count; i++)
             {
                 var s = _items[i].S;
+                if (s == null) continue;   // 虚拟项没有 Selectable，不参与几何回退
                 if (s == from) continue;
                 Vector3 p = PositionOf(s);
                 float ddx = p.x - p0.x, ddy = p.y - p0.y;

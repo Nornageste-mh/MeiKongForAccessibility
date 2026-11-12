@@ -275,12 +275,19 @@ cd mod
 │  └─ package/                  组装出来的安装包（二进制不入库，两份手写文档入库）
 ├─ probe/                       实机探针（P1 证据来源，不入库产物）
 ├─ docs/                        设计依据
+│  ├─ 交互形态纪律.md           形态纪律（随 Framework 0.2.7.3 同步）
+│  ├─ 操作逻辑公约.md           跨作操作语义公约（Framework 0.2.7.3 起，逐作不得分叉）
+│  ├─ 操作约定.md               本作键位 / 游戏原生占用键 / 控件来源 / 本作差异（P0 必填）
+│  ├─ 交互形态判定.md           本作形态判定 B+C 与逐界面证据
+│  ├─ 无障碍补丁流水线.md       P0–P6 流程与 G 条目
+│  ├─ project_status.md         单入口状态页
+│  └─ templates/                模板六件
 └─ tools/                       守卫
    ├─ compile_check.ps1         静态守卫（逐作模式 B）
    ├─ lint_repeat.ps1           重读缓冲区唯一出口
    ├─ check-staged.ps1          提交前守卫（第 0 条纪律 / 二进制 / BOM）
    ├─ package_check.ps1         发行包十二项自检（P6，`release.ps1` 里失败即 exit 1）
-   ├─ smoke.ps1                 自动化冒烟：装包→启动→日志断言（补丁/契约/挂载点/按键链路；`-MenuWalk` 逐项走查 9 个菜单入口）
+   ├─ smoke.ps1                 自动化冒烟：装包→启动→日志断言（补丁/契约/挂载点/按键链路；`-MenuWalk` 数字直达走查 9 个入口）
    ├─ rollout_check.ps1         铺开前只读侦察：L1 同/漂/缺、契约、CfgMenuNav 默认值、文档与工具缺项
 ├─ verify_all.ps1            一键验证：构建 → 三道静态闸门 → 包自检 → 发布包冒烟（-MenuWalk 连菜单走查一起跑；
 │                            逐作仓通用：-RepoRoot / -ExpectedPatches / -ExeName / -ConfigName 换仓只传参数）
