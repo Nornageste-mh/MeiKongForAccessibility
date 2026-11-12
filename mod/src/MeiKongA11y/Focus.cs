@@ -48,6 +48,13 @@ namespace MeiKongA11y
             public int Count;      // 组内总数
             public bool InList;    // 组内 ≥3 项
 
+            // 分块导航（0.2.2.0，用户 m05466）：块名 + 块序号 + 在全部项里的下标。
+            // 「块」是按语义预先定死的（横向功能条 / 竖向图标列 / 唱片机 / 互动 / 面板名 / 对话选项），
+            // 不是自己扫出来的分组；Tab 只切块，方向键只在块内走。
+            public string BlockName;
+            public int Block;
+            public int Global;
+
             // 虚拟项：游戏里没有 Selectable，但玩家应该能用方向键走到的交互目标
             // （诗萌身体、和诗萌聊聊气泡）。它们不进 EventSystem 选中态，
             // 激活交给游戏自己的动作函数（不拄逻辑、不模拟鼠标）。
@@ -55,6 +62,18 @@ namespace MeiKongA11y
             public Action Activate;
             public bool Virtual;
         }
+
+        // ==================== 分块导航（Tab） ====================
+        // 用户口径：「横向一块、竖向一块、每个面板单独一块，按 Tab 在它们之间切换」。
+        // 块按语义预设，不新增模式键：Tab 只在「已经能导航」的状态下换块，和 Windows 原生列表一致。
+        private sealed class BlockInfo
+        {
+            public string Name;
+            public readonly List<int> Items = new List<int>();
+        }
+        private static readonly List<BlockInfo> _blocks = new List<BlockInfo>();
+        private static int _blockIndex;
+        private static Transform _sceneRoot;
 
         internal static Transform Root;
         internal static string Title = "";
@@ -163,6 +182,7 @@ namespace MeiKongA11y
                 _lastMusicTitle = MusicCurrentTitle() ?? "";
                 _musicPollAt = 0f;
                 _sceneWanted = kind == Kind.Scene;
+                if (kind == Kind.Scene) _sceneRoot = root;
 
                 A11yHost.Diag("[焦点] 进入 " + Title + "（" + Domain + " " + DomainId + "）");
                 if (!TryFocusFirst(false))
@@ -237,6 +257,100 @@ namespace MeiKongA11y
         // 这里用「游戏自己的对话行事件」当入口信号（每句台词游戏都会通知我们），只在那时确认一次域，
         // 不做每帧扫屏；离开同样由剧情结束事件/根失效触发。
 
+        // ==================== 对话选项（剧情里的选择） ====================
+        // 选项是游戏自己 Instantiate 的真 Button（ShiMeng.DialogueV2.DialogueChoiceItemView），
+        // 但游戏没给它们任何焦点模型，键盘玩家只能靠补丁。这里把选项容器当成一个「块」：
+        // 玩家听到「对话选项，共 N 项」，↑↓ 在选项间走、Tab 切块、回车走游戏自己的 onClick
+        // （激活第 1/2 级，和鼠标同一条路）；空格推进与数字直选仍归游戏。
+        private static void TickStoryChoices()
+        {
+            try
+            {
+                if (!Reader.InStory)
+                {
+                    if (Domain == Kind.Story && DomainId == "choices") Leave();
+                    return;
+                }
+                if (Domain == Kind.PetPanel || Domain == Kind.UiManager || Domain == Kind.Minigame) return;
+                if (Domain == Kind.Story && DomainId == "choices")
+                {
+                    if (Root == null || !Root.gameObject.activeInHierarchy) { Leave(); return; }
+                    if (CountChoiceViews(Root) == 0)
+                    {
+                        A11yHost.Diag("[焦点] 选项已经选完，退出选项块");
+                        Leave();
+                    }
+                    return;
+                }
+                var container = FindChoiceContainer();
+                if (container == null) return;
+                // 选项刚创建时还在 reveal 淡入（alpha 从 0 起），此时 Collect 一个也收不到，
+                // 会先念一句「对话选项，共 0 项」。等游戏把按钮设成可用（reveal 结束、
+                // SetInteractable(true) 已调用）再进门，一次就把「共 N 项」念对。
+                if (CountUsableChoiceViews(container) == 0) return;
+                if (Domain == Kind.Story) Leave();   // 从「对话操作栏」切到「对话选项」
+                Enter(container, "对话选项", Kind.Story, "choices");
+                if (Active && Root == container) TryFocusFirst(true);   // 进门要出声：对话选项，共 N 项
+            }
+            catch (Exception e) { A11yHost.Diag("[焦点] 选项域异常: " + e.Message); }
+        }
+
+        private static int CountChoiceViews(Transform root)
+        {
+            int n = 0;
+            try
+            {
+                var views = root.GetComponentsInChildren<ShiMeng.DialogueV2.DialogueChoiceItemView>(true);
+                for (int i = 0; i < views.Length; i++)
+                {
+                    var v = views[i];
+                    if (v != null && v.gameObject.activeInHierarchy) n++;
+                }
+            }
+            catch { }
+            return n;
+        }
+
+        /// <summary>选项里「已经能按」的有几个（reveal 结束、button.interactable=true）。</summary>
+        private static int CountUsableChoiceViews(Transform root)
+        {
+            int n = 0;
+            try
+            {
+                var views = root.GetComponentsInChildren<ShiMeng.DialogueV2.DialogueChoiceItemView>(true);
+                for (int i = 0; i < views.Length; i++)
+                {
+                    var v = views[i];
+                    if (v == null || !v.gameObject.activeInHierarchy) continue;
+                    var buttons = v.GetComponentsInChildren<Button>(true);
+                    for (int j = 0; j < buttons.Length; j++)
+                    {
+                        if (buttons[j] != null && buttons[j].IsInteractable()) { n++; break; }
+                    }
+                }
+            }
+            catch { }
+            return n;
+        }
+
+        private static Transform FindChoiceContainer()
+        {
+            try
+            {
+                var views = Resources.FindObjectsOfTypeAll<ShiMeng.DialogueV2.DialogueChoiceItemView>();
+                for (int i = 0; i < views.Length; i++)
+                {
+                    var v = views[i];
+                    if (v == null || !v.gameObject.activeInHierarchy) continue;
+                    var p = v.transform.parent;
+                    if (p == null) continue;
+                    return p;
+                }
+            }
+            catch (Exception e) { A11yHost.Diag("[焦点] 找选项容器异常: " + e.Message); }
+            return null;
+        }
+
         private static Transform FindStoryBar()
         {
             try
@@ -298,6 +412,8 @@ namespace MeiKongA11y
                     }
                 }
                 if (Reader.InStory) _storyWasActive = true;
+                // 0) 剧情里出现选项时，把「选项」做成一个块（游戏没给它们焦点模型）
+                TickStoryChoices();
                 // 0) 挂起的进入请求：小游戏结束后补落面板焦点
                 if (_pendingRoot != null)
                 {
@@ -451,6 +567,19 @@ namespace MeiKongA11y
                 if (Reader.InStory)
                 {
                     if (_editing != null) EndEditing(true);
+                    // 对话选项块：↑↓ 在选项之间走、Tab 切块、回车走游戏自己的 onClick。
+                    // 空格（推进）、数字键（直选）仍归游戏，所以这里只接管这四个键。
+                    if (Domain == Kind.Story && DomainId == "choices" && Active)
+                    {
+                        if (KeyEdge.Pressed(KeyCode.Tab)) { CycleBlock(+1); return true; }
+                        if (KeyEdge.Pressed(KeyCode.UpArrow)) { MoveInBlock(-1); return true; }
+                        if (KeyEdge.Pressed(KeyCode.DownArrow)) { MoveInBlock(+1); return true; }
+                        if (KeyEdge.Pressed(KeyCode.Return) || KeyEdge.Pressed(KeyCode.KeypadEnter))
+                        {
+                            ActivateCurrent();
+                            return true;
+                        }
+                    }
                     return false;
                 }
                 // 正在输入框里打字：所有键都交给游戏（TMP_InputField 自己处理光标/输入法），
@@ -480,18 +609,28 @@ namespace MeiKongA11y
                     if (arrow || rawArrow)
                         A11yHost.Diag("[焦点] 方向键到达 raw=" + rawArrow + " edge=" + arrow
                                       + " InDialogue=" + Reader.InDialogue + " InStory=" + Reader.InStory + " mini=" + Minigame.IsPlaying());
-                    if (!Reader.InStory && !Minigame.IsPlaying() && arrow)
+                    bool tabKey = KeyEdge.Pressed(KeyCode.Tab);
+                    if (!Reader.InStory && !Minigame.IsPlaying() && (arrow || tabKey))
                     {
                         EnterScene();
+                        if (tabKey) CycleBlock(+1);
                         return true;
                     }
                     return false;
                 }
 
-                if (KeyEdge.Pressed(KeyCode.UpArrow)) { MoveBy(0, +1); return true; }
-                if (KeyEdge.Pressed(KeyCode.DownArrow)) { MoveBy(0, -1); return true; }
-                if (KeyEdge.Pressed(KeyCode.LeftArrow)) { MoveBy(-1, 0); return true; }
-                if (KeyEdge.Pressed(KeyCode.RightArrow)) { MoveBy(+1, 0); return true; }
+                // 分块导航（用户 m05466）：Tab 在块之间切换，↑↓ 在**当前块内**逐项移动，
+                // ←→ 只对滑条调值（不做横向移动）。块内走到头就绕回另一端（用户口径「块内循环」）。
+                if (KeyEdge.Pressed(KeyCode.Tab)) { CycleBlock(+1); return true; }
+                if (KeyEdge.Pressed(KeyCode.UpArrow)) { MoveInBlock(-1); return true; }
+                if (KeyEdge.Pressed(KeyCode.DownArrow)) { MoveInBlock(+1); return true; }
+                bool leftKey = KeyEdge.Pressed(KeyCode.LeftArrow);
+                bool rightKey = KeyEdge.Pressed(KeyCode.RightArrow);
+                if (leftKey || rightKey)
+                {
+                    if (AdjustSlider(rightKey ? +1 : -1)) return true;
+                    return false;
+                }
 
                 // 长列表（唱片 25 首、鬼畜制造机 52 个工程）一格一格挪太慢：Home/End 到首尾。
                 // PageUp/PageDown 已按《痴情妹妹》的键概念删掉（参考只有 Home/End，多出来的键
@@ -699,6 +838,124 @@ namespace MeiKongA11y
             Announcer.Now("到头了。");
         }
 
+        // ==================== 分块移动（Tab / ↑↓） ====================
+
+        /// <summary>只在当前块内逐项移动（块内循环：到头绕回另一端）。</summary>
+        internal static void MoveInBlock(int delta)
+        {
+            try
+            {
+                var curItem = CurrentItem;
+                if (curItem == null)
+                {
+                    if (_settleUntil > 0f) return;   // 面板还在淡入，先别急着报「没有控件」
+                    if (TryFocusFirst(true)) return;
+                    Announcer.Now("没有可操作项。");
+                    return;
+                }
+                Collect();
+                var cur2 = CurrentItem;
+                if (cur2 == null || _blocks.Count == 0) return;
+                int bi = cur2.Block;
+                if (bi < 0 || bi >= _blocks.Count) bi = 0;
+                var list = _blocks[bi].Items;
+                if (list.Count == 0) return;
+                int pos = list.IndexOf(cur2.Global);
+                if (pos < 0) pos = 0;
+                int n = list.Count;
+                int np = ((pos + delta) % n + n) % n;
+                var target = _items[list[np]];
+                _blockIndex = bi;
+                SelectItemSilent(target);
+                Announce(target, false);
+            }
+            catch (Exception e) { A11yHost.Diag("[焦点] 块内移动异常: " + e.Message); }
+        }
+
+        /// <summary>Tab：在「语义块」之间切换（横向功能条 / 竖向图标列 / 唱片机 / 互动 / 面板 / 对话选项）。</summary>
+        internal static void CycleBlock(int delta)
+        {
+            try
+            {
+                if (!Active) { EnterScene(); if (!Active) return; }
+                Collect();
+                if (_blocks.Count == 0) { Announcer.Now("没有可操作项。"); return; }
+                if (_blocks.Count == 1)
+                {
+                    var only = _blocks[0];
+                    Item one = null;
+                    for (int i = 0; i < only.Items.Count; i++)
+                    {
+                        var it = _items[only.Items[i]];
+                        if (it.S != null && IsDismissive(it.S)) continue;
+                        one = it;
+                        break;
+                    }
+                    Announcer.Now(only.Name + "，共 " + only.Items.Count + " 项。当前："
+                                  + (one != null ? Describe(one, false) : "没有可操作项") + "。");
+                    return;
+                }
+                var curItem = CurrentItem;
+                int bi = curItem != null ? curItem.Block : _blockIndex;
+                if (bi < 0 || bi >= _blocks.Count) bi = 0;
+                int nb = ((bi + delta) % _blocks.Count + _blocks.Count) % _blocks.Count;
+                _blockIndex = nb;
+                var blk = _blocks[nb];
+                Item target = null;
+                for (int i = 0; i < blk.Items.Count; i++)
+                {
+                    var it = _items[blk.Items[i]];
+                    if (it.S != null && IsDismissive(it.S)) continue;
+                    target = it;
+                    break;
+                }
+                if (target == null) { Announcer.Now(blk.Name + "，" + blk.Items.Count + " 项，没有可操作项。"); return; }
+                SelectItemSilent(target);
+                Announcer.Now(blk.Name + "，共 " + blk.Items.Count + " 项。当前：" + Describe(target, false) + "。");
+            }
+            catch (Exception e) { A11yHost.Diag("[焦点] 切块异常: " + e.Message); }
+        }
+
+        /// <summary>←→ 只对滑条生效（用户口径：左右方向键只调整滑条）。</summary>
+        private static bool AdjustSlider(int dir)
+        {
+            try
+            {
+                var it = CurrentItem;
+                var s = it != null ? it.S : Current;
+                var slider = s as Slider;
+                if (slider == null) return false;
+                float step = Mathf.Max((slider.maxValue - slider.minValue) / 20f, 0.0001f);
+                slider.value = Mathf.Clamp(slider.value + dir * step, slider.minValue, slider.maxValue);
+                var sit = ItemOf(slider);
+                Refresh(sit);
+                Announce(sit, false);
+                return true;
+            }
+            catch (Exception e) { A11yHost.Diag("[焦点] 滑条调整异常: " + e.Message); return false; }
+        }
+
+        /// <summary>探针用：左右方向键的滑条调整。</summary>
+        internal static bool DebugAdjustSlider(int dir) { return AdjustSlider(dir); }
+
+        /// <summary>把选中表示设过去但不播报（切块后统一播一次块摘要，避免两句话打架）。</summary>
+        private static void SelectItemSilent(Item it)
+        {
+            if (it == null) return;
+            _blockIndex = it.Block;
+            if (it.S != null)
+            {
+                _virtualCur = null;
+                var es = EventSystem.current;
+                if (es != null) es.SetSelectedGameObject(it.S.gameObject);
+            }
+            else
+            {
+                ClearSelection();
+                _virtualCur = it;
+            }
+        }
+
         private static void MoveTo(Selectable s, string oldSection)
         {
             _virtualCur = null;
@@ -707,6 +964,7 @@ namespace MeiKongA11y
             es.SetSelectedGameObject(s.gameObject);
             var it = ItemOf(s);
             if (it == null) { Collect(); it = ItemOf(s); }
+            if (it != null) _blockIndex = it.Block;
             bool sectionChanged = it != null && !string.IsNullOrEmpty(it.Section) && it.Section != oldSection;
             A11yHost.Diag("[焦点] 选中 " + s.gameObject.name + (it != null ? "（" + it.Section + (it.InList ? " 第" + it.Index + "/" + it.Count : "") + "）" : ""));
             Announce(it, sectionChanged);
@@ -1160,7 +1418,8 @@ namespace MeiKongA11y
             _extras.Clear();
             // 界面被游戏自己的「隐藏界面」藏起来时，Root 仍然指向主界面根，
             // 但玩家眼前是黑的 —— 这时不该再把「诗萌 / 和诗萌聊聊」当成可浏览项。
-            if (Domain != Kind.Scene || Root == null || Surfaces.ChromeHidden()) return;
+            if (Root == null || Surfaces.ChromeHidden()) return;
+            if (Domain != Kind.Scene && Domain != Kind.PetPanel && Domain != Kind.UiManager) return;
             try
             {
                 GameObject bubble;
@@ -1247,6 +1506,7 @@ namespace MeiKongA11y
             // 这是「最小选中表示」的一部分，已登记在 docs/交互形态判定.md 的遗留缺陷里。
             ClearSelection();
             _virtualCur = it;
+            _blockIndex = it.Block;
             bool sectionChanged = !string.IsNullOrEmpty(it.Section) && it.Section != oldSection;
             A11yHost.Diag("[焦点] 选中(虚拟) " + it.Label);
             Announce(it, sectionChanged);
@@ -1592,6 +1852,24 @@ namespace MeiKongA11y
 
         internal static string PathOf(Selectable s) { return s == null ? "" : PathOfT(s.transform); }
 
+        /// <summary>探针/日志用：当前域里的块清单。</summary>
+        internal static string BlocksSummary()
+        {
+            try
+            {
+                Collect();
+                var sb = new StringBuilder();
+                sb.Append("blocks=").Append(_blocks.Count).Append(" cur=").Append(_blockIndex);
+                for (int i = 0; i < _blocks.Count; i++)
+                {
+                    sb.Append("\n  #").Append(i + 1).Append(" ").Append(_blocks[i].Name)
+                      .Append(" (").Append(_blocks[i].Items.Count).Append(")");
+                }
+                return sb.ToString();
+            }
+            catch (Exception e) { return "blocks 异常: " + e.Message; }
+        }
+
         private static string PathOfT(Transform tr)
         {
             try
@@ -1622,6 +1900,7 @@ namespace MeiKongA11y
 
             int start = PickFirstIndex();
             var first = _items[start];
+            _blockIndex = first.Block;
             if (first.S != null) EventSystem.current.SetSelectedGameObject(first.S.gameObject);
             else { ClearSelection(); _virtualCur = first; }
             A11yHost.Diag("[焦点] 首项 " + (first.S != null ? first.S.gameObject.name : first.Go.name) + "（" + first.Section + "）共 " + _items.Count + " 项");
@@ -1804,17 +2083,34 @@ namespace MeiKongA11y
         private static void Collect()
         {
             _items.Clear();
+            _blocks.Clear();
             if (Root == null) return;
-            Selectable[] all;
-            try { all = Root.GetComponentsInChildren<Selectable>(true); }
-            catch { return; }
 
-            var raw = new List<Selectable>(all.Length);
-            for (int i = 0; i < all.Length; i++)
+            // 采集源：主域根 +（面板/对话打开时）主界面根。用户口径是「Tab 切到全屏所有可见块」，
+            // 所以面板打开时主界面的块也要能 Tab 回去，但面板自己仍是一整块。
+            var sources = new List<Transform>(2);
+            sources.Add(Root);
+            if (Domain != Kind.Scene && Domain != Kind.Story && !Surfaces.ChromeHidden())
             {
-                var s = all[i];
-                if (!Candidate(s)) continue;
-                raw.Add(s);
+                var backing = SceneRoot();
+                if (backing != null && backing != Root) sources.Add(backing);
+            }
+
+            var raw = new List<Selectable>(64);
+            var sceneSourceOf = new Dictionary<Selectable, bool>();
+            for (int si = 0; si < sources.Count; si++)
+            {
+                Selectable[] all;
+                try { all = sources[si].GetComponentsInChildren<Selectable>(true); }
+                catch { continue; }
+                for (int i = 0; i < all.Length; i++)
+                {
+                    var s = all[i];
+                    if (s == null || raw.Contains(s)) continue;
+                    if (!Candidate(s, sources[si])) continue;
+                    raw.Add(s);
+                    sceneSourceOf[s] = si > 0;
+                }
             }
 
             // 去重 1：真正的「同一块像素被套了三层」（背景卡片的 Mask/BGSprite/Box）。
@@ -1936,6 +2232,86 @@ namespace MeiKongA11y
                 it.Count = total;
                 it.InList = total >= 3;
             }
+
+            // ---- 分块：按语义预设块名归类（Tab 在块之间切换） ----
+            for (int i = 0; i < _items.Count; i++)
+            {
+                var it = _items[i];
+                it.Global = i;
+                bool fromScene;
+                if (it.Virtual) it.BlockName = "互动";
+                else if (it.S != null && sceneSourceOf.TryGetValue(it.S, out fromScene) && fromScene)
+                    it.BlockName = SceneBlockName(it.S.transform);
+                else if (Domain == Kind.Scene) it.BlockName = SceneBlockName(it.S != null ? it.S.transform : Root);
+                else if (Domain == Kind.Story) it.BlockName = "对话选项";
+                else it.BlockName = string.IsNullOrEmpty(Title) ? "面板" : Title;
+            }
+            var order = new List<string>();
+            var firstSeen = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (int i = 0; i < _items.Count; i++)
+            {
+                string bn = _items[i].BlockName ?? "";
+                if (!firstSeen.ContainsKey(bn)) { firstSeen[bn] = order.Count; order.Add(bn); }
+            }
+            order.Sort(delegate(string a, string b)
+            {
+                int ra = BlockRank(a), rb = BlockRank(b);
+                if (ra != rb) return ra.CompareTo(rb);
+                return firstSeen[a].CompareTo(firstSeen[b]);
+            });
+            var idxOf = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (int bi = 0; bi < order.Count; bi++)
+            {
+                idxOf[order[bi]] = bi;
+                _blocks.Add(new BlockInfo { Name = order[bi] });
+            }
+            for (int i = 0; i < _items.Count; i++)
+            {
+                var it = _items[i];
+                int bi;
+                if (idxOf.TryGetValue(it.BlockName ?? "", out bi))
+                {
+                    it.Block = bi;
+                    _blocks[bi].Items.Add(i);
+                }
+                else it.Block = 0;
+            }
+        }
+
+        /// <summary>主界面根（面板打开时用来并入主界面的块）。</summary>
+        private static Transform SceneRoot()
+        {
+            try
+            {
+                if (_sceneRoot != null && _sceneRoot.gameObject.activeInHierarchy && AlphaOf(_sceneRoot) >= 0.05f) return _sceneRoot;
+                var c = FindSceneCanvas();
+                if (c != null) _sceneRoot = c;
+                return _sceneRoot;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>主界面按语义固定分块：顶部横向功能条 / 右侧竖向图标列 / 底部唱片机 / 互动。</summary>
+        private static string SceneBlockName(Transform t)
+        {
+            string p = PathOfT(t);
+            if (p.IndexOf("/UpRight/", StringComparison.Ordinal) >= 0) return "竖向图标列";
+            if (p.IndexOf("/Right/", StringComparison.Ordinal) >= 0) return "横向功能条";
+            if (p.IndexOf("PetMusicPlayer_Window", StringComparison.Ordinal) >= 0) return "唱片机";
+            return "主界面";
+        }
+
+        private static int BlockRank(string name)
+        {
+            switch (name)
+            {
+                case "横向功能条": return 0;
+                case "竖向图标列": return 1;
+                case "唱片机": return 2;
+                case "互动": return 3;
+                case "对话选项": return 0;
+                default: return 9;
+            }
         }
 
         private static Item BuildItem(Selectable s)
@@ -1982,13 +2358,14 @@ namespace MeiKongA11y
             return found;
         }
 
-        private static bool Candidate(Selectable s)
+        private static bool Candidate(Selectable s, Transform scope = null)
         {
             if (s == null) return false;
+            if (scope == null) scope = Root;
             try
             {
                 if (!s.gameObject.activeInHierarchy) return false;
-                if (Root != null && !s.transform.IsChildOf(Root)) return false;
+                if (scope != null && !s.transform.IsChildOf(scope)) return false;
                 if (AlphaOf(s.transform) < 0.05f) return false;   // 幽灵面板：active 但透明
                 if (Excluded(s)) return false;
                 return true;

@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <!--
     逐作 csproj 模板。new_game.py 会按 route 参数保留 MONO 或 IL2CPP 那一段，
@@ -19,7 +19,7 @@
   <PropertyGroup>
     <AssemblyName>MeiKongA11y</AssemblyName>
     <RootNamespace>MeiKongA11y</RootNamespace>
-    <Version>0.2.1.0</Version>
+    <Version>0.2.2.0</Version>
     <LangVersion>9.0</LangVersion>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
